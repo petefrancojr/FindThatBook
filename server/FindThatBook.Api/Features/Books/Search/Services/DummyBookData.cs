@@ -1,6 +1,6 @@
-using FindThatBook.Api.Features.Books.Models;
+using FindThatBook.Api.Features.Books.Search.Models;
 
-namespace FindThatBook.Api.Features.Books.Services;
+namespace FindThatBook.Api.Features.Books.Search.Services;
 
 /// <summary>Placeholder results until Open Library and Gemini are wired in.</summary>
 public static class DummyBookData

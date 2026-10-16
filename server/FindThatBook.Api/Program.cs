@@ -1,10 +1,10 @@
-using FindThatBook.Api.Features.Books.Services.Search;
+using FindThatBook.Api.Features.Books;
 using Microsoft.AspNetCore.HttpLogging;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
-builder.Services.AddScoped<IBookSearchService, BookSearchService>();
+builder.Services.AddBooksFeature();
 builder.Services.AddHttpLogging(options =>
 {
     options.LoggingFields = HttpLoggingFields.RequestMethod

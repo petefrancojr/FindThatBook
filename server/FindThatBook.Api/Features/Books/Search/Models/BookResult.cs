@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace FindThatBook.Api.Features.Books.Models;
+namespace FindThatBook.Api.Features.Books.Search.Models;
 
 public class BookResult
 {
