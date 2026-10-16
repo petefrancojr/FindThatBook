@@ -1,3 +1,6 @@
 <Solution>
-  <Project Path="server/FindThatBook.Api/FindThatBook.Api.csproj" />
+  <Folder Name="/server/">
+    <Project Path="server/FindThatBook.Api/FindThatBook.Api.csproj" />
+    <Project Path="server/FindThatBook.Api.Tests/FindThatBook.Api.Tests.csproj" />
+  </Folder>
 </Solution>

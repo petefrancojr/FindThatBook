@@ -12,3 +12,15 @@ services:
       - api
     ports:
       - "4200:80"
+
+  tests:
+    image: mcr.microsoft.com/dotnet/sdk:10.0
+    profiles: ["test"]
+    working_dir: /src
+    volumes:
+      - ./server:/src
+      - nuget-cache:/root/.nuget/packages
+    command: dotnet test FindThatBook.Api.Tests
+
+volumes:
+  nuget-cache:
