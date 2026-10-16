@@ -1,0 +1,14 @@
+services:
+  api:
+    build: ./server
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+    ports:
+      - "5080:8080"
+
+  web:
+    build: ./client
+    depends_on:
+      - api
+    ports:
+      - "4200:80"

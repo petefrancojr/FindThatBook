@@ -1,0 +1,18 @@
+# .NET
+bin/
+obj/
+*.user
+.vs/
+
+# Node / Angular
+node_modules/
+dist/
+.angular/
+
+# Secrets
+.env
+.claude/settings.local.json
+.claude/
+# Personal notes
+2025_Developer_Project_Explained.md
+2025_Developer_Project.pdf
