@@ -1,0 +1,50 @@
+<main class="page">
+  <h1>Search</h1>
+
+  <form class="search-form" role="search" (submit)="search($event)">
+    <label class="visually-hidden" for="search-query">Title, author or keywords</label>
+    <input
+      id="search-query"
+      type="search"
+      name="q"
+      placeholder="Try “austen bennet” or “tolkien hobbit 1937”"
+      autocomplete="off"
+      [attr.maxlength]="maxQueryLength"
+      [value]="query()"
+      (input)="onInput($event)"
+    />
+    <button type="submit" [disabled]="!canSearch()">
+      {{ loading() ? 'Searching…' : 'Search' }}
+    </button>
+  </form>
+
+  @if (error(); as message) {
+    <p class="error" role="alert">{{ message }}</p>
+  }
+
+  @if (response(); as result) {
+    @if (result.results.length === 0) {
+      <p class="empty">No books matched “{{ result.query }}”.</p>
+    } @else {
+      <ol class="results">
+        @for (book of result.results; track book.open_library_id) {
+          <li class="result">
+            @if (book.cover_url) {
+              <img class="cover" [src]="book.cover_url" [alt]="'Cover of ' + book.title" width="60" height="90" />
+            }
+            <div class="details">
+              <h2><a [href]="book.url" target="_blank" rel="noopener">{{ book.title }}</a></h2>
+              <p class="meta">
+                {{ book.author }}
+                @if (book.first_publish_year) {
+                  <span>· {{ book.first_publish_year }}</span>
+                }
+              </p>
+              <p class="explanation">{{ book.explanation }}</p>
+            </div>
+          </li>
+        }
+      </ol>
+    }
+  }
+</main>

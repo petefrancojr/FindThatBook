@@ -13,7 +13,21 @@ services:
     ports:
       - "4200:80"
 
-  tests:
+  api-client:
+    image: node:24-alpine
+    profiles: ["tools"]
+    depends_on:
+      - api
+    working_dir: /app
+    volumes:
+      - ./client:/app
+      - client-node-modules:/app/node_modules
+    command: >
+      sh -c "npm ci --no-audit --no-fund &&
+      until wget -q -O /dev/null http://api:8080/api/health; do echo waiting for api; sleep 1; done &&
+      npm run api:generate"
+
+  server-tests:
     image: mcr.microsoft.com/dotnet/sdk:10.0
     profiles: ["test"]
     working_dir: /src
@@ -22,5 +36,15 @@ services:
       - nuget-cache:/root/.nuget/packages
     command: dotnet test FindThatBook.Api.Tests
 
+  client-tests:
+    image: node:24-alpine
+    profiles: ["test"]
+    working_dir: /app
+    volumes:
+      - ./client:/app
+      - client-node-modules:/app/node_modules
+    command: sh -c "npm ci --no-audit --no-fund && npx ng test --watch=false"
+
 volumes:
   nuget-cache:
+  client-node-modules:

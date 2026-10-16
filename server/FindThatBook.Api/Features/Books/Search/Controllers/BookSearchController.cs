@@ -7,12 +7,13 @@ namespace FindThatBook.Api.Features.Books.Search.Controllers;
 
 [ApiController]
 [Route("api/books")]
+[Produces("application/json")]
 public class BookSearchController(IBookSearchService bookSearchService) : ControllerBase
 {
     private const int MaxQueryLength = 200;
 
     /// <summary>Finds the books a messy search term most likely refers to.</summary>
-    [HttpGet("search")]
+    [HttpGet("search", Name = "SearchBooks")]
     [ProducesResponseType<BookSearchResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status502BadGateway)]
