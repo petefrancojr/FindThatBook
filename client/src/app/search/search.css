@@ -99,12 +99,38 @@ h1 {
 }
 
 .meta,
+.book-id,
 .explanation {
   margin: 0;
 }
 
 .meta {
   color: var(--muted);
+}
+
+/* Separators come from CSS so the spacing doesn't depend on template whitespace. */
+.meta span + span::before {
+  content: '·';
+  margin: 0 0.4em;
+}
+
+.book-id {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.book-id code {
+  line-height: 1.4;
+  padding: 0 0.35em;
+  padding-top: 2px;
+  font-size: 0.95em;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
 }
 
 .visually-hidden {

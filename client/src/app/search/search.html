@@ -1,5 +1,5 @@
 <main class="page">
-  <h1>Search</h1>
+  <h1>Book Search</h1>
 
   <form class="search-form" role="search" (submit)="search($event)">
     <label class="visually-hidden" for="search-query">Title, author or keywords</label>
@@ -35,11 +35,12 @@
             <div class="details">
               <h2><a [href]="book.url" target="_blank" rel="noopener">{{ book.title }}</a></h2>
               <p class="meta">
-                {{ book.author }}
+                <span>{{ book.author }}</span>
                 @if (book.first_publish_year) {
-                  <span>· {{ book.first_publish_year }}</span>
+                  <span>{{ book.first_publish_year }}</span>
                 }
               </p>
+              <p class="book-id">Open Library ID <code>{{ book.open_library_id }}</code></p>
               <p class="explanation">{{ book.explanation }}</p>
             </div>
           </li>
