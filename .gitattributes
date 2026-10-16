@@ -1,0 +1,9 @@
+# Store and check out text files with LF on every OS, overriding core.autocrlf.
+# LF matters here because these files are also used inside Linux containers.
+* text=auto eol=lf
+
+# Binary files: never convert
+*.ico binary
+*.png binary
+*.jpg binary
+*.pdf binary
