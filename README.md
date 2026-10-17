@@ -67,7 +67,7 @@ The generated client uses `http://api:8080/` as its default root URL because tha
 | `GET /api/books/search?q={text}` | Searches for books. Returns `400` if `q` is missing, blank, or over 200 characters, `422` with Open Library's reason if Open Library refuses every search made from it, and `502` if Open Library or Gemini is unavailable. A search with no letters or digits, such as `!!!`, returns `200` with no books. |
 | `GET /api/health` | Reports that the API is running. |
 
-Search returns real Open Library results: Gemini reads the search into several readings, Open Library is searched once per reading, and the first ten distinct works are returned. Ranking and Gemini-written explanations aren't built yet, so every result has tier `E` ("no clear winner") and a plain explanation built from Open Library's fields.
+Search runs in steps: Gemini reads the search into readings, Open Library is searched once per reading, each work's primary authors are worked out, duplicate works are merged, the works are ranked against the most likely reading using the brief's tiers A to E, and Gemini explains the ten that are returned.
 
 ## Design decisions
 
@@ -112,7 +112,9 @@ server/FindThatBook.Api/
 │       └── Services/          search logic, one class per step:
 │                              BookSearchService runs the steps in order,
 │                              IQueryReader / GeminiQueryReader reads the search into readings (prompt, schema),
-│                              ICandidateFinder / OpenLibraryCandidateFinder finds works for the readings
+│                              ICandidateFinder / OpenLibraryCandidateFinder finds works for the readings,
+│                              PrimaryAuthorResolver, WorkConsolidator and CandidateRanker (pure rules),
+│                              ICandidateExplainer / GeminiCandidateExplainer writes the explanations
 └── Integrations/
     ├── OpenLibrary/
     │   ├── IOpenLibraryClient.cs, OpenLibraryClient.cs
@@ -235,6 +237,26 @@ Decisions behind these rules:
 
 Measured on live data before it was built: across 20 classics, 108 of 111 extra names (adapters, illustrators) became contributors and no real author was demoted. Across 12 co-written books, none of 26 co-authors was demoted.
 
+### Tiers are decided by rules; Gemini only explains them
+
+Each canonical work is compared with the **first** reading, which the prompt makes the complete one (every title, author and keyword Gemini identified). `CandidateRanker` gives it a tier from the brief's hierarchy, and the works are ordered by tier, keeping the search order within a tier. `GeminiCandidateExplainer` then writes one sentence for each of the ten that are returned, from the tier and the facts that decided it.
+
+| Title compared with the reading | The reading's author on the work | Tier |
+|---|---|---|
+| Exact | primary or listed author | **A** |
+| Exact | only a contributor | **B** |
+| Exact, and the reading names no author | the work has a primary or listed author / only contributors | **A** / **B** |
+| Near | in any role | **C** |
+| The reading names no title | primary or listed author | **D** |
+| Anything else | | **E** |
+
+- **"Exact" ignores case, punctuation, accents, a subtitle and small words** such as "a", "the" and "of", so *Tale of Two Cities* is an exact match for *A Tale of Two Cities*. **"Near"** means missing or extra words (*The Hobbit & The Lord of the Rings*) or a small misspelling (*El hobbit*).
+- **Names match loosely:** every word of the shorter name must appear in the longer, so "tolkien" and "j r r tolkien" both match "J.R.R. Tolkien". When several people on a work match, the best credit counts.
+- **A person kept as a keyword still counts.** Gemini sometimes reads "dixon hobbit" as the title *The Hobbit* with the keyword "dixon". A keyword counts as the author when it names someone on a work whose title matches the reading's. So "dixon" counts, and a character's name such as "bennet" doesn't, even though unrelated authors are called Bennet.
+- **D needs the reading to have no title.** It is the brief's author-only fallback. When the reading has a title and a work doesn't match it, the work is E, so an unrelated book by someone with the same surname doesn't rank as a match.
+
+Why the tiers aren't decided by Gemini: an earlier version asked Gemini for the tier too, and on live searches it applied the rules inconsistently. It gave Tolkien's own *Hobbit* a B for "dixon hobbit", rated Austen's novels E ("no author match") for "jane austen", and named people in explanations who weren't on that work. The tiers are mechanical checks, so code makes them the same every time and they can be tested without Gemini. Gemini does the part it is good at: turning the facts into a sentence such as *"Exact title; Charles Dixon listed as adapter."* It receives only each work's own fields and match facts, and is told never to add anything else or disagree with the tier.
+
 ### Search text is normalized before it is read
 
 The brief asks for searches to be normalized (lowercase, punctuation, diacritics, partials) so that small differences don't stop a match. `ToNormalized()` in `Features/Books/Search/Helpers/StringExtensions.cs` does this, and `BookSearchService` runs it on the user's search, and on the title, author and keywords Gemini reads from it before they are sent to Open Library. When matching against Open Library is built, its titles and author names should go through the same method, so both sides of a comparison follow identical rules.
@@ -288,21 +310,13 @@ Decisions behind these rules:
 
 `StringExtensionsTests` covers each rule, the brief's own examples and the edge cases above.
 
-## Pending until later steps are built
-
-Search works from end to end, but some steps the brief asks for aren't built yet. Until they are, the search uses the stand-ins below. Each one is marked in the code and should be removed when the step that replaces it lands.
-
-| Stand-in now | Why | Replaced by |
-|---|---|---|
-| **Every result has tier `E`.** `BookResultMapper.UnrankedTier` | `tier` is required on every result, and `E` is the brief's "no clear winner" level, the only honest level before anything is ranked. | Ranking with the brief's hierarchy (exact title and primary author first, author-only fallback last), which gives each result its real tier. |
-| **Explanations are built from Open Library's fields:** *Open Library lists "The Hobbit" by J.R.R. Tolkien, first published in 1937.* | `explanation` is required, and the brief wants it grounded in fetched data. This sentence only uses fields Open Library returned. | Gemini writing each explanation from the fetched fields. The template sentence should stay as the fallback when Gemini is unavailable or gives no answer. |
-| **Results are the first ten canonical works, in reading order.** | Duplicate works for the same book are merged, and the most likely reading's works come first, but nothing orders them by how well they match yet. | Ranking. |
-
-These are settled and stay as they are:
+## Settled search behaviour
 
 - **Each reading is searched in parallel,** asking for 10 works each.
 - **When Gemini gives no readings,** the normalized search is sent to Open Library instead, so a Gemini problem doesn't mean no results.
 - **A refused reading is skipped while other readings got through,** so one refused reading doesn't lose the others. Only when every reading is refused does the user get a `422`.
+- **Up to ten results are returned.** The brief's tier E says "up to 5 ordered candidates"; `MaxResults` is 10 by choice.
+- **When Gemini can't explain a result** (its answer is blocked or isn't valid JSON), the result keeps its tier and gets a plain sentence built from Open Library's fields instead: *Open Library lists "The Hobbit" by J.R.R. Tolkien, first published in 1937.*
 
 ## Nice to have
 

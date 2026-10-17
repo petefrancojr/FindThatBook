@@ -6,9 +6,10 @@ namespace FindThatBook.Api.Features.Books.Search.Services;
 
 /// <summary>
 /// Runs a book search from start to end: reads the search into readings, finds candidate works for them,
-/// works out who wrote each one, merges works that are the same book, and maps them to the books the client receives.
+/// works out who wrote each one, merges works that are the same book, ranks them against the most likely reading,
+/// has Gemini explain the ones shown, and maps them to the books the client receives.
 /// </summary>
-public class BookSearchService(IQueryReader queryReader, ICandidateFinder candidateFinder, ILogger<BookSearchService> logger) : IBookSearchService
+public class BookSearchService(IQueryReader queryReader, ICandidateFinder candidateFinder, ICandidateExplainer candidateExplainer, ILogger<BookSearchService> logger) : IBookSearchService
 {
     /// <summary>The most distinct books the client receives for one search.</summary>
     private const int MaxResults = 10;
@@ -45,17 +46,24 @@ public class BookSearchService(IQueryReader queryReader, ICandidateFinder candid
 
         logger.LogInformation("\nCanonical Work Count: {total}\n", canonicalWorks.Count);
 
-        // TODO: Update the Rank and Explanation for each uniqueResult. Gemeni should assist with this.
+        // The first reading is the most likely one, so the works are ranked against it.
+        var mostLikelyReading = readings.FirstOrDefault();
+        var rankedWorks = CandidateRanker.Rank(mostLikelyReading, canonicalWorks);
 
-        // TODO: Sort by Rank
+        // Tiers run "A" to "E", so ordinal order is best first. OrderBy is stable, so works keep their order within a tier.
+        var sortedRankedWorks = rankedWorks.OrderBy(work => work.Tier, StringComparer.Ordinal);
 
-        var results = canonicalWorks
-            .Select(BookResultMapper.ToBookResult)
-            .OfType<BookResult>()
+        // Only the works that will be shown are explained. A work without a key or title can't be shown.
+        var shownWorks = sortedRankedWorks
+            .Where(work => work.Work.WorkId is not null && !string.IsNullOrWhiteSpace(work.Work.Title))
             .Take(MaxResults)
             .ToList();
+        var explainedWorks = await candidateExplainer.ExplainAsync(query, mostLikelyReading, shownWorks, cancellationToken);
 
-        // Use Gemeni to Rank & Explain openLibraryResponse
+        var results = explainedWorks
+            .Select(BookResultMapper.ToBookResult)
+            .OfType<BookResult>()
+            .ToList();
 
         return new BookSearchResponse { Query = query, Results = results };
     }

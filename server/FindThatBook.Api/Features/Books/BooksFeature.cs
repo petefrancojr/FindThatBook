@@ -10,6 +10,7 @@ public static class BooksFeature
         services.AddScoped<IBookSearchService, BookSearchService>();
         services.AddScoped<IQueryReader, GeminiQueryReader>();
         services.AddScoped<ICandidateFinder, OpenLibraryCandidateFinder>();
+        services.AddScoped<ICandidateExplainer, GeminiCandidateExplainer>();
 
         return services;
     }

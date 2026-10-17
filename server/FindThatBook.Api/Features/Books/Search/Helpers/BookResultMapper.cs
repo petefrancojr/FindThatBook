@@ -10,8 +10,7 @@ public static class BookResultMapper
     private const string CoversSite = "https://covers.openlibrary.org";
 
     /// <summary>
-    /// The brief's lowest level, "no clear winner": every result gets it until ranking
-    /// decides which level each one actually reaches.
+    /// The brief's lowest level, "no clear winner", for a candidate that couldn't be ranked.
     /// </summary>
     public const string UnrankedTier = "E";
 
@@ -37,8 +36,8 @@ public static class BookResultMapper
             OpenLibraryId = doc.WorkId,
             Url = ToUrl(doc),
             CoverUrl = ToCoverUrl(doc.CoverId),
-            Tier = UnrankedTier,
-            Explanation = ToExplanation(doc.Title, author, doc.FirstPublishYear),
+            Tier = candidate.Tier ?? UnrankedTier,
+            Explanation = candidate.Explanation ?? ToExplanation(doc.Title, author, doc.FirstPublishYear),
         };
     }
 
@@ -74,8 +73,8 @@ public static class BookResultMapper
         coverId > 0 ? $"{CoversSite}/b/id/{coverId}-M.jpg" : null;
 
     /// <summary>
-    /// A plain explanation built only from fields Open Library returned. Used until Gemini writes
-    /// explanations, and kept as the fallback when it can't.
+    /// A plain explanation built only from fields Open Library returned, for a candidate Gemini couldn't
+    /// explain, for example when its answer was blocked or not valid JSON.
     /// </summary>
     private static string ToExplanation(string title, string author, int? firstPublishYear) =>
         firstPublishYear is null

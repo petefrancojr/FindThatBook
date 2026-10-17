@@ -20,8 +20,11 @@ public class GeminiQueryReader(IGeminiClient gemini, ILogger<GeminiQueryReader> 
         often misspelled, abbreviated or in any order.
 
         Return {MaxReadings} readings of the search, most likely first. You are allowed to provide duplicate readings only after all possibile arrangments have been exhausted.
+        The first reading is the complete one: it holds every title, author and keyword you identified, because the
+        books found are ranked against it. The readings that split the search come after it.
         - title: the book's full, correctly spelled title, only if the search points to one.
-        - author: the author's full, correctly spelled name, only if the search points to one.
+        - author: the author's full, correctly spelled name, only if the search points to one. A person the search
+          names who worked on a book in another way, such as its adapter or illustrator, also goes here.
         - keywords: the other useful words from the search, such as character names, places,
           subjects or a year, spelled correctly. If a word from the search is an author or the title,
           then it must be omitted from the keywords list.
@@ -39,6 +42,8 @@ public class GeminiQueryReader(IGeminiClient gemini, ILogger<GeminiQueryReader> 
         - If you can identify a title, include a reading with the title as a keyword then make the title null.
         - If you can identify an author and keywords, include a reading with the author and the keywords.
         - If you can identify an author, include a reading with the author as a keyword then make the author null.
+
+        It is important that the most complete and accurate reading is provided first.
         """;
 
     // Must stay above ReadingsSchema: static fields are set up in the order they're written.

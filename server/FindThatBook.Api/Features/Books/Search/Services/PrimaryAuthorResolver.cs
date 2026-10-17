@@ -65,13 +65,13 @@ public static partial class PrimaryAuthorResolver
         // One person can have two author records ('Salem's Lot lists Stephen King twice), so each name counts once.
         var listed = work.AuthorNames
             .Select((name, index) => (Name: name, AuthorId: index < work.AuthorKeys.Count ? work.AuthorKeys[index] : null))
-            .DistinctBy(person => PersonKey(person.Name))
+            .DistinctBy(person => PersonNames.Key(person.Name))
             .ToList();
         var roles = NotWritingRolesByPerson(work.Contributors);
 
         // Someone must have written the book. Authors who illustrated their own book (Tolkien drew The Hobbit's
         // pictures) can be tagged "Illustrator", so roles that would mark everyone listed are ignored.
-        if (listed.All(person => roles.ContainsKey(PersonKey(person.Name))))
+        if (listed.All(person => roles.ContainsKey(PersonNames.Key(person.Name))))
         {
             roles.Clear();
         }
@@ -86,7 +86,7 @@ public static partial class PrimaryAuthorResolver
 
         var authors = listed.Select(person =>
         {
-            if (roles.TryGetValue(PersonKey(person.Name), out var role))
+            if (roles.TryGetValue(PersonNames.Key(person.Name), out var role))
             {
                 return Credit(person, AuthorCredit.Contributor, $"role in contributor: {role}", role);
             }
@@ -140,22 +140,11 @@ public static partial class PrimaryAuthorResolver
             var roleWord = role.ToNormalized().Split(' ').FirstOrDefault() ?? "";
             if (NotWritingRoles.Contains(roleWord))
             {
-                roles.TryAdd(PersonKey(match.Groups["name"].Value), role);
+                roles.TryAdd(PersonNames.Key(match.Groups["name"].Value), role);
             }
         }
 
         return roles;
-    }
-
-    /// <summary>
-    /// The same key for "Charles Dixon" and "Dixon, Charles.": library records put the surname first, and
-    /// sometimes add dates ("Wenzel, David, 1950-"), which are dropped.
-    /// </summary>
-    private static string PersonKey(string name)
-    {
-        var parts = name.Split(',', 2);
-        var ordered = parts.Length == 2 ? $"{parts[1]} {parts[0]}" : name;
-        return string.Join(' ', ordered.ToNormalized().Split(' ').Where(word => !word.All(char.IsDigit)));
     }
 
     [GeneratedRegex(@"^(?<name>.+?)\s*\((?<role>[^)]+)\)\s*$")]
