@@ -98,7 +98,7 @@ public class GeminiQueryReader(IGeminiClient gemini, ILogger<GeminiQueryReader> 
 
             foreach (var reading in normalizedReadings)
             {
-                logger.LogInformation("\n\n===========\nTitle:{title}\nAuthor:{author}\nKeyWords: [{keywords}]\n===========\n\n", reading.Title, reading.Author, string.Join(",\n", reading.Keywords));
+                // logger.LogInformation("\n\n===========\nTitle:{title}\nAuthor:{author}\nKeyWords: [{keywords}]\n===========\n\n", reading.Title, reading.Author, string.Join(",\n", reading.Keywords));
             }
 
             return normalizedReadings;

@@ -17,6 +17,7 @@ public class WorkSearchRequest
         "subtitle",
         "author_name",
         "author_key",
+        "contributor",
         "first_publish_year",
         "cover_i",
         "cover_edition_key",

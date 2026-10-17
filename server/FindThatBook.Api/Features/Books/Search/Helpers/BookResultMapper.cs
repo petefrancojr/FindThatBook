@@ -3,7 +3,7 @@ using FindThatBook.Api.Integrations.OpenLibrary.Models;
 
 namespace FindThatBook.Api.Features.Books.Search.Helpers;
 
-/// <summary>Turns Open Library search results into the <see cref="BookResult"/>s the API returns.</summary>
+/// <summary>Turns book candidates into the <see cref="BookResult"/>s the API returns.</summary>
 public static class BookResultMapper
 {
     private const string OpenLibrarySite = "https://openlibrary.org";
@@ -16,19 +16,18 @@ public static class BookResultMapper
     public const string UnrankedTier = "E";
 
     /// <summary>
-    /// Maps one search result. Returns null when it has no key or no title, since a result
+    /// Maps one candidate. Returns null when its work has no key or no title, since a result
     /// can't be shown or linked without them.
     /// </summary>
-    public static BookResult? ToBookResult(WorkSearchDoc doc)
+    public static BookResult? ToBookResult(BookCandidate candidate)
     {
+        var doc = candidate.Work;
         if (doc.WorkId is null || string.IsNullOrWhiteSpace(doc.Title))
         {
             return null;
         }
 
-        // Until primary authors are resolved from the work record, the first credited name is used:
-        // author_name can also list illustrators and translators, and the first name is usually the author.
-        var author = doc.AuthorNames.FirstOrDefault() ?? "Unknown author";
+        var author = ToAuthor(candidate);
 
         return new BookResult
         {
@@ -41,6 +40,27 @@ public static class BookResultMapper
             Tier = UnrankedTier,
             Explanation = ToExplanation(doc.Title, author, doc.FirstPublishYear),
         };
+    }
+
+    /// <summary>
+    /// The primary authors. When nothing shows who wrote the book, everyone listed as an author, since guessing
+    /// could name an illustrator as the writer. Contributors are only used when no one else is listed.
+    /// </summary>
+    private static string ToAuthor(BookCandidate candidate)
+    {
+        var primary = candidate.PrimaryAuthors.Select(author => author.Name).ToList();
+        if (primary.Count > 0)
+        {
+            return string.Join(", ", primary);
+        }
+
+        var listed = candidate.Authors.Where(author => author.Credit == AuthorCredit.Listed).Select(author => author.Name).ToList();
+        if (listed.Count > 0)
+        {
+            return string.Join(", ", listed);
+        }
+
+        return candidate.Authors.FirstOrDefault()?.Name ?? "Unknown author";
     }
 
     /// <summary>

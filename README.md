@@ -195,6 +195,46 @@ Alternatives considered:
 | Treat it as an outage (`502`) | Reuse the existing handler | It tells the user to retry something that will fail again, and it would count against Open Library in the logs. |
 | Check the query before calling Open Library | Avoid the request entirely | Open Library's rules (which words are blocked, the minimum length) are its own and can change. Copying them would drift. |
 
+### Duplicate works are merged into one canonical work
+
+Open Library often has more than one work record for the same book. A search for "pride and prejudice" returns both `OL66554W` and `OL15165350W`: same title, same author, same year. `WorkConsolidator` merges them before the results are mapped, so each book appears once.
+
+- **Two works are the same book when the main title and the set of author IDs both match.** The main title is the title up to its first `:`, `;` or `[`, normalized. So "Frankenstein; or, The Modern Prometheus" and "Frankenstein" match, and so do Open Library's noted records such as "Pride and Prejudice [1/2]".
+- **Round brackets are not cut.** In collections they hold the real titles: "Novels (Emma / Pride and Prejudice)" and "Novels (Northanger Abbey / Pride and Prejudice)" are different books, and cutting at `(` merged them into one.
+- **Adaptations stay separate.** Dixon's graphic novel is titled *The Hobbit* too, but its authors differ from Tolkien's novel, so it remains its own result. The brief ranks such works lower; it doesn't hide them.
+- **The canonical work is the one with the most editions,** because that is the record Open Library attaches most editions to: `OL66554W` has 4,042, `OL15165350W` has 132. Edition count only chooses between records already known to be the same book, so a wrong pick shows the same book under a different ID rather than a wrong book.
+- **Books keep the order they were first found in,** so the most likely reading's works still come first.
+- **It is pure logic with no calls,** so it is a static class with no interface, unlike the steps that call Gemini or Open Library.
+
+Measured on live searches: *Pride and Prejudice* 26 works became 23, *Frankenstein* 11 became 9, and *The Hobbit* and *Harry Potter and the Philosopher's Stone* each lost one duplicate.
+
+### Primary authors are told apart from contributors
+
+Open Library's `author_name` can list adapters, illustrators and translators next to the real author. Dixon's graphic novel of *The Hobbit* lists Charles Dixon, Sean Deming and J.R.R. Tolkien. The brief asks for primary authors from `works.authors`, but work records carry no roles: in 144 sampled work records with 332 author entries, none had one. `PrimaryAuthorResolver` uses what search results do carry, with no extra calls.
+
+For each person listed on a work, the first rule that applies decides:
+
+| Rule | Example | Result |
+|---|---|---|
+| 1. A role in the search result's `contributor` field that means they didn't write it: Adapter, Illustrator, Translator | "Charles Dixon (Adapter)" | Dixon is a contributor |
+| 2. Someone listed is the only author of a **bigger** work with the same main title | Tolkien is the only author of *The Hobbit* `OL27482W` (482 editions), bigger than Dixon's (10) | Tolkien is primary; the others on Dixon's work are contributors |
+| 3. The work lists one author | *Dune*: Frank Herbert | Herbert is primary |
+| 4. Nothing applies | *Good Omens*: Pratchett, Gaiman | Both stay listed authors; nobody is guessed |
+
+The response's `author` is the primary authors, or everyone listed when none is known, so an illustrator is never presented as the writer.
+
+Decisions behind these rules:
+
+- **"Narrator" and "Editor" don't count as "didn't write it".** Co-authors carry them too: Stephen Dubner is tagged "Narrator" on *Freakonomics*, which he co-wrote, and King and Straub are tagged "Editor" on *Black House*.
+- **"Bigger" stops stray records from demoting co-authors.** Open Library has a small "Good Omens" record crediting only Gaiman. Without the size check, Pratchett would become a contributor on the 73-edition work they wrote together. Edition count only compares two records here; it never decides authorship on its own.
+- **Roles that would mark everyone are ignored,** because someone wrote the book. Authors who illustrated their own book can be tagged "Illustrator".
+- **A name listed twice counts once.** *'Salem's Lot* lists Stephen King under two author records.
+- **"Whoever is left wrote it" only applies to one person.** On *Tao te Ching*, Legge is tagged "Translator", and the other two names besides Laozi are most likely untagged translators, so none of the three is guessed.
+- **It runs before duplicates are merged.** Every work Open Library returned gets its authors resolved, and then `WorkConsolidator` keeps one candidate per book, with that candidate's authors.
+- **It is pure logic, so it is a static class,** like `WorkConsolidator`. Each decision is logged at Debug with its reason, for example `Charles Dixon = Contributor (role in contributor: Adapter)`.
+
+Measured on live data before it was built: across 20 classics, 108 of 111 extra names (adapters, illustrators) became contributors and no real author was demoted. Across 12 co-written books, none of 26 co-authors was demoted.
+
 ### Search text is normalized before it is read
 
 The brief asks for searches to be normalized (lowercase, punctuation, diacritics, partials) so that small differences don't stop a match. `ToNormalized()` in `Features/Books/Search/Helpers/StringExtensions.cs` does this, and `BookSearchService` runs it on the user's search, and on the title, author and keywords Gemini reads from it before they are sent to Open Library. When matching against Open Library is built, its titles and author names should go through the same method, so both sides of a comparison follow identical rules.
@@ -256,8 +296,7 @@ Search works from end to end, but some steps the brief asks for aren't built yet
 |---|---|---|
 | **Every result has tier `E`.** `BookResultMapper.UnrankedTier` | `tier` is required on every result, and `E` is the brief's "no clear winner" level, the only honest level before anything is ranked. | Ranking with the brief's hierarchy (exact title and primary author first, author-only fallback last), which gives each result its real tier. |
 | **Explanations are built from Open Library's fields:** *Open Library lists "The Hobbit" by J.R.R. Tolkien, first published in 1937.* | `explanation` is required, and the brief wants it grounded in fetched data. This sentence only uses fields Open Library returned. | Gemini writing each explanation from the fetched fields. The template sentence should stay as the fallback when Gemini is unavailable or gives no answer. |
-| **The author is the first name in `author_name`.** | It is usually the real author, but `author_name` also lists illustrators, adapters and translators. For the Dixon graphic novel of *The Hobbit*, the result currently shows "Charles Dixon". | Resolving primary authors from the work record's `authors` list (`GetWorkAsync`, after checking `IsWork`), so contributors are kept apart. |
-| **Results are the first ten distinct works, in reading order.** | Works are de-duplicated by key only, and the most likely reading's works come first. Different works for the same book (for example two *Pride and Prejudice* records) both appear. | Consolidating works into canonical works, then ranking. |
+| **Results are the first ten canonical works, in reading order.** | Duplicate works for the same book are merged, and the most likely reading's works come first, but nothing orders them by how well they match yet. | Ranking. |
 
 These are settled and stay as they are:
 

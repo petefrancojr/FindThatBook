@@ -77,11 +77,11 @@ public class OpenLibraryCandidateFinder(IOpenLibraryClient openLibrary, ILogger<
             return ([], ex);
         }
 
-        logger.LogInformation(
-            "\nOpen Library search {Search} found {Count} works:\n{Works}\n",
-            Describe(request),
-            docs.Count,
-            string.Join("\n", docs.Select(doc => $"  {doc.WorkId} \"{doc.Title}\" by {string.Join(", ", doc.AuthorNames)} ({doc.FirstPublishYear})")));
+        // logger.LogInformation(
+        //     "\nOpen Library search {Search} found {Count} works:\n{Works}\n",
+        //     Describe(request),
+        //     docs.Count,
+        //     string.Join("\n", docs.Select(doc => $"  {doc.WorkId} \"{doc.Title}\" by {string.Join(", ", doc.AuthorNames)} ({doc.FirstPublishYear})")));
         return (docs, null);
     }
 

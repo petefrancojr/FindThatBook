@@ -6,7 +6,7 @@ namespace FindThatBook.Api.Features.Books.Search.Services;
 
 /// <summary>
 /// Runs a book search from start to end: reads the search into readings, finds candidate works for them,
-/// and maps the works to the books the client receives.
+/// works out who wrote each one, merges works that are the same book, and maps them to the books the client receives.
 /// </summary>
 public class BookSearchService(IQueryReader queryReader, ICandidateFinder candidateFinder, ILogger<BookSearchService> logger) : IBookSearchService
 {
@@ -30,15 +30,26 @@ public class BookSearchService(IQueryReader queryReader, ICandidateFinder candid
 
         logger.LogInformation("\nTotal Unique Result Count: {total}\n", openLibraryResponse.Count);
 
-        // TODO: Consolidate works into canonicle works openLibraryResponse
+        var candidates = PrimaryAuthorResolver.Resolve(openLibraryResponse);
 
-        // TODO: Resolve primary authors from 'works.authors'
+        foreach (var candidate in candidates.Where(candidate => candidate.Authors.Count > 1))
+        {
+            logger.LogDebug(
+                "Authors of {WorkId} \"{Title}\": {Authors}",
+                candidate.Work.WorkId,
+                candidate.Work.Title,
+                string.Join("; ", candidate.Authors.Select(author => $"{author.Name} = {author.Credit} ({author.Reason})")));
+        }
+
+        var canonicalWorks = WorkConsolidator.Consolidate(candidates);
+
+        logger.LogInformation("\nCanonical Work Count: {total}\n", canonicalWorks.Count);
 
         // TODO: Update the Rank and Explanation for each uniqueResult. Gemeni should assist with this.
 
         // TODO: Sort by Rank
 
-        var results = openLibraryResponse
+        var results = canonicalWorks
             .Select(BookResultMapper.ToBookResult)
             .OfType<BookResult>()
             .Take(MaxResults)

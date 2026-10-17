@@ -29,6 +29,14 @@ public class WorkSearchDoc
     [JsonPropertyName("author_key")]
     public IReadOnlyList<string> AuthorKeys { get; init; } = [];
 
+    /// <summary>
+    /// Everyone credited on the work's editions, as library records write them. Some carry their role in brackets,
+    /// for example "Charles Dixon (Adapter)" or "David Wenzel (Illustrator)"; many have no role, for example
+    /// "Tolkien, J. R. R. 1892-1973.".
+    /// </summary>
+    [JsonPropertyName("contributor")]
+    public IReadOnlyList<string> Contributors { get; init; } = [];
+
     [JsonPropertyName("first_publish_year")]
     public int? FirstPublishYear { get; init; }
 
