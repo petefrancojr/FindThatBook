@@ -1,5 +1,5 @@
 using FindThatBook.Api.Features.Books.Search.Controllers;
-using FindThatBook.Api.Features.Books.Search.Models;
+using FindThatBook.Api.Features.Books.Search.DTOs;
 using FindThatBook.Api.Features.Books.Search.Services;
 using Microsoft.AspNetCore.Mvc;
 

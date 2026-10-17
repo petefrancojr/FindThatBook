@@ -1,4 +1,4 @@
-namespace FindThatBook.Api.Common.Errors;
+namespace FindThatBook.Api.Middleware;
 
 public static class ErrorHandlingSetup
 {

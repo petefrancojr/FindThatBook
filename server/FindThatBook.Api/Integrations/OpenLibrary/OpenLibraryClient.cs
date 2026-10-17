@@ -1,14 +1,14 @@
 using System.Diagnostics;
 using System.Net;
 using System.Text.Json;
-using System.Text.RegularExpressions;
+using FindThatBook.Api.Integrations.OpenLibrary.Exceptions;
 using FindThatBook.Api.Integrations.OpenLibrary.Models;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Options;
 
 namespace FindThatBook.Api.Integrations.OpenLibrary;
 
-public partial class OpenLibraryClient(HttpClient httpClient, IOptions<OpenLibraryOptions> options, ILogger<OpenLibraryClient> logger) : IOpenLibraryClient
+public class OpenLibraryClient(HttpClient httpClient, IOptions<OpenLibraryOptions> options, ILogger<OpenLibraryClient> logger) : IOpenLibraryClient
 {
     // Field names are set on each model with [JsonPropertyName]: Open Library mixes snake_case and camelCase.
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -24,21 +24,21 @@ public partial class OpenLibraryClient(HttpClient httpClient, IOptions<OpenLibra
 
     public Task<WorkRecord?> GetWorkAsync(string workId, CancellationToken cancellationToken = default)
     {
-        var id = ToValidId(workId, WorkIdPattern(), "work", "OL27482W", nameof(workId));
+        var id = ToValidId(workId, OpenLibraryKeys.IsWorkId, "work", "OL27482W", nameof(workId));
 
         return GetJsonAsync<WorkRecord>($"works/{id}.json", notFoundIsNull: true, cancellationToken);
     }
 
     public Task<AuthorRecord?> GetAuthorAsync(string authorId, CancellationToken cancellationToken = default)
     {
-        var id = ToValidId(authorId, AuthorIdPattern(), "author", "OL26320A", nameof(authorId));
+        var id = ToValidId(authorId, OpenLibraryKeys.IsAuthorId, "author", "OL26320A", nameof(authorId));
 
         return GetJsonAsync<AuthorRecord>($"authors/{id}.json", notFoundIsNull: true, cancellationToken);
     }
 
     public Task<AuthorWorksResponse?> GetAuthorWorksAsync(string authorId, int? limit = null, int? offset = null, CancellationToken cancellationToken = default)
     {
-        var id = ToValidId(authorId, AuthorIdPattern(), "author", "OL26320A", nameof(authorId));
+        var id = ToValidId(authorId, OpenLibraryKeys.IsAuthorId, "author", "OL26320A", nameof(authorId));
 
         var parameters = new List<KeyValuePair<string, string?>>();
         if (limit is not null)
@@ -90,6 +90,11 @@ public partial class OpenLibraryClient(HttpClient httpClient, IOptions<OpenLibra
                 return null;
             }
 
+            if (response.StatusCode == HttpStatusCode.UnprocessableEntity)
+            {
+                throw new OpenLibraryQueryRejectedException(await ReadRejectionReasonsAsync(response, cancellationToken));
+            }
+
             if (!response.IsSuccessStatusCode)
             {
                 throw new OpenLibraryUnavailableException(
@@ -100,34 +105,62 @@ public partial class OpenLibraryClient(HttpClient httpClient, IOptions<OpenLibra
             {
                 return await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken);
             }
-            catch (Exception ex) when (ex is JsonException or NotSupportedException)
+            catch (JsonException ex)
             {
-                // Invalid JSON, or not JSON at all, for example an HTML error page with a 200 status.
+                // ReadFromJsonAsync doesn't check the content type, so an HTML error page with a 200 status lands here too.
                 throw new OpenLibraryUnavailableException("Open Library returned a response that isn't valid JSON.", response.StatusCode, ex);
             }
         }
     }
 
-    /// <summary>
-    /// Accepts "OL27482W" or "/works/OL27482W" and returns the bare ID. Anything else is rejected,
-    /// so a caller's value can never change the path being requested.
-    /// </summary>
-    private static string ToValidId(string value, Regex pattern, string kind, string example, string parameterName)
+    /// <summary>Reads Open Library's messages from a 422 body. An unreadable body gives no reasons.</summary>
+    private static async Task<IReadOnlyList<string>> ReadRejectionReasonsAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {
-        var id = OpenLibraryKeys.ToId(value?.Trim())?.ToUpperInvariant();
-        if (id is null || !pattern.IsMatch(id))
+        try
+        {
+            var body = await response.Content.ReadFromJsonAsync<QueryRejectedResponse>(JsonOptions, cancellationToken);
+            return body?.Details
+                .Select(detail => CleanRejectionMessage(detail.Message))
+                .OfType<string>()
+                .Where(message => message.Length > 0)
+                .ToList() ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// "Value error, Query too short, ..." becomes "Query too short, ...". Some messages also arrive
+    /// wrapped as a Python tuple, "('Invalid query; ...',)", which is unwrapped.
+    /// </summary>
+    private static string? CleanRejectionMessage(string? message)
+    {
+        var cleaned = message?.Replace("Value error, ", "").Trim();
+        if (cleaned is not null && cleaned.StartsWith("('") && cleaned.EndsWith("',)"))
+        {
+            cleaned = cleaned[2..^3].Trim();
+        }
+
+        return cleaned;
+    }
+
+    /// <summary>
+    /// Accepts only a bare ID such as "OL27482W", in any case, and returns it upper-cased, the form Open Library uses.
+    /// Anything else is rejected, so a caller's value can never change the path being requested.
+    /// Models give the bare form through WorkId, AuthorId and KeyReference.Id.
+    /// </summary>
+    private static string ToValidId(string value, Func<string?, bool> isValid, string kind, string example, string parameterName)
+    {
+        var id = value?.ToUpperInvariant();
+        if (!isValid(id))
         {
             throw new ArgumentException($"'{value}' isn't an Open Library {kind} ID such as \"{example}\".", parameterName);
         }
 
-        return id;
+        return id!;
     }
-
-    [GeneratedRegex("^OL[0-9]+W$")]
-    private static partial Regex WorkIdPattern();
-
-    [GeneratedRegex("^OL[0-9]+A$")]
-    private static partial Regex AuthorIdPattern();
 
     /// <summary>Builds "search.json?..." with only the parameters that are set, each one URL-encoded.</summary>
     private static string BuildSearchUrl(WorkSearchRequest request)

@@ -10,6 +10,8 @@ services:
 
   web:
     build: ./client
+    # Runs as usual, but its logs stay out of the `docker compose up` output. `docker compose logs web` shows them.
+    attach: false
     depends_on:
       - api
     ports:

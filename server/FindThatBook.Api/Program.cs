@@ -1,4 +1,4 @@
-using FindThatBook.Api.Common.Errors;
+using FindThatBook.Api.Middleware;
 using FindThatBook.Api.Common.OpenApi;
 using FindThatBook.Api.Features.Books;
 using FindThatBook.Api.Integrations.Gemini;

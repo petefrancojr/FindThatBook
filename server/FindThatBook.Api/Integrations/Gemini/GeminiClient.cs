@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using FindThatBook.Api.Integrations.Gemini.Exceptions;
 using FindThatBook.Api.Integrations.Gemini.Models;
 using Microsoft.Extensions.Options;
 
@@ -63,6 +64,7 @@ public class GeminiClient(HttpClient httpClient, IOptions<GeminiOptions> options
             }
             catch (JsonException ex)
             {
+                // ReadFromJsonAsync doesn't check the content type, so an HTML page from a proxy with a 200 status lands here too.
                 throw new GeminiUnavailableException("Gemini returned a response that isn't valid JSON.", response.StatusCode, ex);
             }
 
@@ -90,7 +92,7 @@ public class GeminiClient(HttpClient httpClient, IOptions<GeminiOptions> options
             var body = await response.Content.ReadFromJsonAsync<GeminiErrorResponse>(JsonOptions, cancellationToken);
             return body?.Error;
         }
-        catch (Exception ex) when (ex is JsonException or NotSupportedException)
+        catch (JsonException)
         {
             // Not Gemini's usual error JSON, for example an HTML page from a proxy.
             return null;

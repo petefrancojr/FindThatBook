@@ -1,7 +1,8 @@
+using FindThatBook.Api.Common.Exceptions;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 
-namespace FindThatBook.Api.Common.Errors;
+namespace FindThatBook.Api.Middleware;
 
 /// <summary>
 /// Turns <see cref="ExternalServiceUnavailableException"/> into a 502 ProblemDetails response.

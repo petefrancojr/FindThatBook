@@ -1,5 +1,6 @@
 using FindThatBook.Api.Features.Books.Search.Services;
 using FindThatBook.Api.Integrations.Gemini;
+using FindThatBook.Api.Integrations.Gemini.Exceptions;
 using FindThatBook.Api.Integrations.Gemini.Models;
 using FindThatBook.Api.Tests.TestSupport;
 using Microsoft.Extensions.Logging.Abstractions;

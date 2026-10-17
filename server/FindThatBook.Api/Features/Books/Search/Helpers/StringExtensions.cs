@@ -20,10 +20,9 @@ public static class StringExtensions
         [new Rune('ı')] = "i",
     };
 
-    /// <summary>Marks that join the letters around them rather than separate words: "J.R.R." is "jrr", "O'Brien" is "obrien".</summary>
-    private static readonly HashSet<Rune> JoiningMarks =
+    /// <summary>Every kind of apostrophe. Each one becomes a plain "'".</summary>
+    private static readonly HashSet<Rune> Apostrophes =
     [
-        new Rune('.'),
         new Rune('\''),
         new Rune('‘'), // ‘
         new Rune('’'), // ’
@@ -32,22 +31,24 @@ public static class StringExtensions
     ];
 
     /// <summary>
-    /// Puts search text into one standard form so small differences don't stop a match:
-    /// lowercase, no accents, no punctuation, single spaces.
-    /// For example "  J.R.R. Tolkien — The Hobbit!" and "jrr tolkien the hobbit" both become "jrr tolkien the hobbit".
+    /// Puts search text into the form Open Library's search matches best, so small differences don't stop a match:
+    /// lowercase, no accents, no punctuation except apostrophes inside words, single spaces.
+    /// For example "  J.R.R. Tolkien — The Hobbit!" becomes "j r r tolkien the hobbit".
     /// </summary>
     /// <remarks>
     /// In order:
     /// <list type="number">
     /// <item>Unicode compatibility forms become plain ones: full-width "Ｔｏｌｋｉｅｎ", ligatures like "ﬁ" and superscripts like "²".</item>
     /// <item>Accents are removed from Latin letters ("Brontë" is "bronte"), and Latin letters that have none get a plain
-    /// spelling ("Ø" is "o", "ß" is "ss"). Marks in other scripts are kept, since they can make a different letter.</item>
-    /// <item>Everything is lowercased.</item>
-    /// <item>Full stops and apostrophes are dropped without a space; "&amp;" becomes "and"; any other punctuation,
-    /// symbol or emoji becomes a space.</item>
+    /// spelling ("Ø" is "o", "ß" is "ss"). Open Library's author and title fields don't match "Søren" or "straße".
+    /// Marks in other scripts are kept, since they can make a different letter.</item>
+    /// <item>Everything is lowercased, which also stops "AND", "OR" and "NOT" being read as search operators.</item>
+    /// <item>Apostrophes inside a word are kept as a plain "'": Open Library finds "o'brien" and "o'connor" far more
+    /// often than "obrien" or "o brien". Apostrophes at the start or end of a word are dropped.</item>
+    /// <item>Full stops, "&amp;" and any other punctuation, symbol or emoji become a space. Initials stay apart
+    /// ("J.R.R." is "j r r"), because Open Library's author field finds nothing for "jrr tolkien".</item>
     /// <item>Invisible characters such as zero-width spaces and soft hyphens are removed.</item>
     /// <item>All whitespace (tabs, new lines, non-breaking spaces) collapses to single spaces, trimmed at both ends.</item>
-    /// <item>Spaced initials are joined, so "J. R. R. Tolkien" matches "JRR Tolkien": two or more single letters in a row become one word.</item>
     /// </list>
     /// Letters and digits in any script are kept. Small words such as "a" and "of" are kept too:
     /// they can be a whole title ("It"), so dropping them is left to matching rather than to the text itself.
@@ -82,8 +83,9 @@ public static class StringExtensions
             afterLatinLetter = false;
 
             // Checked before letters: Unicode counts some apostrophes, such as "ʼ", as letters.
-            if (JoiningMarks.Contains(rune))
+            if (Apostrophes.Contains(rune))
             {
+                cleaned.Append('\'');
                 continue;
             }
 
@@ -100,18 +102,19 @@ public static class StringExtensions
                     cleaned.Append(lower.ToString());
                 }
             }
-            else if (rune.Value == '&')
-            {
-                cleaned.Append(" and ");
-            }
             else
             {
                 cleaned.Append(' ');
             }
         }
 
-        var words = cleaned.ToString().Normalize(NormalizationForm.FormC).Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        return JoinSpacedInitials(words);
+        // Apostrophes only count inside a word: "'dune'" is "dune", and a lone "'" disappears.
+        var words = cleaned.ToString()
+            .Normalize(NormalizationForm.FormC)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Select(word => word.Trim('\''))
+            .Where(word => word.Length > 0);
+        return string.Join(' ', words);
     }
 
     /// <summary>Basic Latin through Latin Extended-B, Latin Extended Additional, and Latin Extended-C and -D.</summary>
@@ -120,35 +123,4 @@ public static class StringExtensions
         || rune.Value is >= 0x1E00 and <= 0x1EFF
         || rune.Value is >= 0x2C60 and <= 0x2C7F
         || rune.Value is >= 0xA720 and <= 0xA7FF;
-
-    /// <summary>Joins words with single spaces, merging runs of two or more one-letter words: "j r r tolkien" is "jrr tolkien".</summary>
-    private static string JoinSpacedInitials(string[] words)
-    {
-        var result = new List<string>(words.Length);
-        var initials = new StringBuilder();
-
-        foreach (var word in words)
-        {
-            if (word.Length == 1 && char.IsLetter(word[0]))
-            {
-                initials.Append(word);
-                continue;
-            }
-
-            FlushInitials();
-            result.Add(word);
-        }
-
-        FlushInitials();
-        return string.Join(' ', result);
-
-        void FlushInitials()
-        {
-            if (initials.Length > 0)
-            {
-                result.Add(initials.ToString());
-                initials.Clear();
-            }
-        }
-    }
 }

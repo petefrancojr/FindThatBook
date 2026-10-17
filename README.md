@@ -67,7 +67,7 @@ The generated client uses `http://api:8080/` as its default root URL because tha
 | `GET /api/books/search?q={text}` | Searches for books. Returns `400` if `q` is missing, blank, or over 200 characters, and `502` if Open Library or Gemini is unavailable. |
 | `GET /api/health` | Reports that the API is running. |
 
-Search currently returns dummy data.
+Search returns real Open Library results: Gemini reads the search into up to three readings, Open Library is searched once per reading, and the first five distinct works are returned. Ranking and Gemini-written explanations aren't built yet, so every result has tier `E` ("no clear winner") and a plain explanation built from Open Library's fields.
 
 ## Design decisions
 
@@ -81,13 +81,15 @@ server/FindThatBook.Api/
 │   ├── Books/
 │   │   └── Search/
 │   │       ├── Controllers/
-│   │       ├── Helpers/      small extensions used only by this feature
-│   │       ├── Models/       all of the feature's models
+│   │       ├── DTOs/         the response the API returns (BookSearchResponse)
+│   │       ├── Helpers/      small helpers used only by this feature (normalization, mapping)
+│   │       ├── Models/       the feature's other models
 │   │       └── Services/     business logic
 │   └── Health/
 │       └── Controllers/
 ├── Integrations/             clients for external services, shared by features
-└── Common/                   cross-cutting setup (OpenAPI, error handling)
+├── Middleware/               request pipeline steps (error handling)
+└── Common/                   shared setup and types (OpenAPI, the shared exception base)
 ```
 
 Everything related to one feature sits in one place. Changing how book search works means opening one folder, not hunting through several. A new feature is added as a new folder next to the existing ones and doesn't touch them.
@@ -104,8 +106,10 @@ server/FindThatBook.Api/
 │   ├── BooksFeature.cs        registers the feature's services
 │   └── Search/
 │       ├── Controllers/
-│       ├── Models/            all of the feature's models: the API response and the ones used inside search
-│       └── Services/          search logic: prompts, mapping, consolidation, ranking
+│       ├── DTOs/              the response the API returns
+│       ├── Helpers/           normalization and mapping Open Library data to BookResult
+│       ├── Models/            BookResult and the models used inside search
+│       └── Services/          search logic: prompts, consolidation, ranking
 └── Integrations/
     ├── OpenLibrary/
     │   ├── IOpenLibraryClient.cs, OpenLibraryClient.cs
@@ -121,14 +125,14 @@ Rules for this layout:
 
 - **Integrations stay general.** A client describes what its service can do (search, fetch a work, generate content), never what book search needs. The prompts we send Gemini and the JSON we ask it to return belong to the feature that uses them, which keeps each client reusable.
 - **Integrations never reference features.** They don't know about `BookResult`, tiers or each other. A feature injects the interface it needs. Because of this one-way rule, `Integrations/` could later move into its own class library without changes.
-- **Each `Models/` folder has one owner.** `Search/Models` holds all of the search feature's models. Some form the API response (`BookSearchResponse`, `BookResult`) and change only when we change the API. Others are used only inside the feature and never reach the client, such as `QueryReadings` and `QueryReading`, which hold the answer `BookSearchService` gets from Gemini. `OpenLibrary/Models` and `Gemini/Models` copy another service's JSON and change only when that service does.
+- **Each `Models/` folder has one owner.** `Search/DTOs` and `Search/Models` hold the search feature's models. Some form the API response (`BookSearchResponse` in `DTOs/`, `BookResult` in `Models/`) and change only when we change the API. Others are used only inside the feature and never reach the client, such as `QueryReadings` and `QueryReading`, which hold the answer `BookSearchService` gets from Gemini. `OpenLibrary/Models` and `Gemini/Models` copy another service's JSON and change only when that service does.
 - **External models stop at the feature.** `BookSearchService` maps Open Library and Gemini data into our own types. Controllers and API responses never expose them, so a change on Open Library's side doesn't change our API.
 - **The mapping step holds the real decisions.** Merging editions into works and separating primary authors from contributors happens while mapping Open Library data in the feature. Keeping that mapping in its own class makes it easy to find and to test with recorded Open Library JSON.
 - **External models are named after their source,** for example `WorkSearchDoc` (one of the `docs` in Open Library's search response) and `GenerateContentResponse` (Gemini's `generateContent` answer), so they aren't confused with our `BookResult`.
 
 ### An unavailable external service is a 502
 
-When Gemini or Open Library can't give an answer, its client throws an exception derived from `ExternalServiceUnavailableException` in `Common/Errors`. That covers a network failure, a timeout, a rejected API key, rate limiting or a server error. `ExternalServiceExceptionHandler` turns it into a `502` ProblemDetails response that names the service ("Gemini is unavailable right now. Try again in a moment."). The underlying reason is logged but never sent to the client.
+When Gemini or Open Library can't give an answer, its client throws an exception derived from `ExternalServiceUnavailableException` in `Common/Exceptions`. That covers a network failure, a timeout, a rejected API key, rate limiting or a server error. Each integration keeps its own exceptions in its `Exceptions/` folder. `ExternalServiceExceptionHandler` in `Middleware/` turns it into a `502` ProblemDetails response that names the service ("Gemini is unavailable right now. Try again in a moment."). The underlying reason is logged but never sent to the client.
 
 An answer that arrives but isn't usable, such as a blocked prompt or empty text, is not an error at the client level. The Gemini client returns it with `Text` set to null, and the feature that asked decides what to do, for example falling back to a template explanation.
 
@@ -148,19 +152,44 @@ Like the Gemini client, `IOpenLibraryClient` knows nothing about book search. Ma
 - **It asks only for the fields it reads.** Without a `fields` parameter Open Library returns every field, including edition and ISBN lists hundreds of entries long. `WorkSearchRequest.DefaultFields` lists the fields `WorkSearchDoc` maps. A caller can pass its own list, for example adding `editions` to get each work's best-matching edition.
 - **Field names are mapped one by one.** Open Library mixes `snake_case` (`author_name`, `first_publish_year`) with `camelCase` (`numFound`), so every model property has a `[JsonPropertyName]` instead of relying on a naming policy.
 - **Every result field is optional.** Open Library leaves out what a work doesn't have, so strings and numbers are nullable and lists default to empty.
-- **IDs come with and without their path.** `key` arrives as `/works/OL27482W`, and every model has a `WorkId`, `AuthorId` or `EditionId` that gives the bare `OL27482W`. The methods that take an ID accept either form.
-- **IDs are checked before they reach a URL.** `GetWorkAsync` only accepts `OL…W` and the author methods only `OL…A`, so a value from a search result or a user can never change the path being requested. Anything else throws `ArgumentException`, because it is a bug in the caller, not an outage.
+- **IDs come with and without their path.** `key` arrives as `/works/OL27482W`, and every model has a `WorkId`, `AuthorId` or `EditionId` that gives the bare `OL27482W`. The methods that take an ID accept only the bare form, in any case (`ol27482w` works too), and send it upper-cased.
+- **IDs are checked before they reach a URL.** `GetWorkAsync` only accepts `OL…W` and the author methods only `OL…A`, so a value from a search result or a user can never change the path being requested. Anything else throws `ArgumentException`, because it is a bug in the caller, not an outage. A sample of 11,245 author keys from live searches all matched.
+- **Some search results are editions, not works.** An edition that was never attached to a work still appears in search, under its own edition ID (`/works/OL8866470M`, ending in `M`). There were 80 in a sample of 12,941 results, and 15 in the first 1,000 for "harry potter". Requesting `/works/OL8866470M.json` redirects to the edition record at `/books/`, which has a different shape. `GetWorkAsync` rejects the ID instead of reading an edition as a work, and `WorkSearchDoc.IsWork` lets the caller skip the lookup and use what the search result already holds.
 - **`author_name` in search results is not the author list.** It holds every name credited on any edition, including illustrators and translators. `WorkRecord.Authors` is the work's own list, and each `WorkAuthorRole` has a `Role` (such as "Translator") only when the person is a contributor rather than a primary author.
-- **Some text fields have two shapes.** `description`, `bio` and `first_sentence` come either as a plain string or as `{ "type": "/type/text", "value": "..." }`, even between two records of the same type (Tolkien's bio is a string, Austen's is an object). `TextValueJsonConverter` reads both into a string. As a precaution, `KeyReference` (such as a work's link to an author) also accepts a bare path string in place of `{ "key": "..." }`, so one oddly shaped record can't fail a whole response.
+- **Some text fields have two shapes.** `description`, `bio` and `first_sentence` come either as a plain string or as `{ "type": "/type/text", "value": "..." }`, even between two records of the same type (Tolkien's bio is a string, Austen's is an object). `TextValueJsonConverter` reads both into a string. In a sample of 270 work records, 110 descriptions were strings and 99 were objects.
 - **Image lists can hold `-1`.** `covers` and `photos` use `-1` to mean "no image", so a caller must skip it before building an image URL.
 - **An author's works are not ranked.** `/authors/{id}/works.json` returns works in no useful order (Tolkien's first page is colouring books). For the brief's "top works by that author" fallback, search by author instead, where Open Library ranks by relevance.
-- **"Not found" is not an outage.** A missing work or author returns null, so the caller can fall back. A 404 from search does mean an outage, because a search with no matches returns an empty `Docs` list rather than a 404. Open Library also answers 200 to a query Solr can't parse, so there is no "bad query" status to handle.
+- **"Not found" is not an outage.** A missing work or author returns null, so the caller can fall back. A 404 from search does mean an outage, because a search with no matches returns an empty `Docs` list rather than a 404.
+- **A refused query is not an outage either.** Open Library answers `422` to queries it won't run: a blocked word on its own (`the`) or anything under 3 characters (`of`, `a`, `*`). The client throws `OpenLibraryQueryRejectedException` with Open Library's reasons, not `OpenLibraryUnavailableException`, because retrying won't help and the service is up. The caller should treat it as a query with no matches. Other malformed queries still get a `200` with no results, and a few (a bare `AND`, an unknown `sort`) get a `500`, which can't be told apart from a real outage and stays a 502.
 - **It identifies itself.** Open Library asks applications to send a `User-Agent` with their name and, for regular use, a contact address. It is set in `OpenLibrary:UserAgent`.
-- **Outages are a 502,** the same as Gemini: an unreachable host, a timeout, an error status or a body that isn't JSON throws `OpenLibraryUnavailableException`.
+- **Outages are a 502,** the same as Gemini: an unreachable host, a timeout, an error status other than `404` or `422`, or a body that isn't JSON throws `OpenLibraryUnavailableException`.
+
+### A refused Open Library query is handled by the feature, not the error middleware
+
+When Open Library refuses a query (a `422`, for `the` or anything under 3 characters), `OpenLibraryClient` throws `OpenLibraryQueryRejectedException`. `BookSearchService` catches it where it calls the search, logs Open Library's reason, and carries on as if the search found no works. The user gets a normal `200` with fewer or no results.
+
+Design considerations:
+
+- **It isn't an outage.** Open Library answered and is working, and the same query will be refused every time. A `502` saying "Open Library is unavailable, try again" would be wrong, and trying again wouldn't help. That's why the exception doesn't derive from `ExternalServiceUnavailableException`.
+- **For a book search, a refused query means "nothing found".** The user typed something; it just can't be searched as it is. That is the same answer a search with no matches gives, so it's handled the same way.
+- **The client stays general.** "Refused means no matches" is a decision about book search. Another feature could reasonably decide differently, for example by showing the user Open Library's reason, so the client reports the refusal and leaves the decision to the caller.
+- **A missed catch should be visible.** Nothing in `ExternalServiceExceptionHandler` handles this exception, so if a future caller forgets to catch it, the request fails with a `500`. That points straight at the missing catch, rather than hiding it.
+
+Alternatives considered:
+
+| Alternative | What it would do | Why not now |
+|---|---|---|
+| Map it in the exception middleware as a safety net | A forgotten catch anywhere gives an empty `200` (or a `400`) instead of a `500` | Middleware can't build a proper empty result for each feature, and it would hide the missed catch. Worth adding if more features start calling Open Library search. |
+| Map it to a `400 Bad Request` | Tell the user their search can't be run | Users don't control how their words are turned into an Open Library query, so it isn't their error. |
+| Treat it as an outage (`502`) | Reuse the existing handler | It tells the user to retry something that will fail again, and it would count against Open Library in the logs. |
+| Return an empty list from the client | No exception at all | Every caller would lose the reason, and couldn't tell "refused" apart from "no matches". |
+| Check the query before calling Open Library | Avoid the request entirely | Open Library's rules (which words are blocked, the minimum length) are its own and can change. Copying them would drift. |
 
 ### Search text is normalized before it is read
 
-The brief asks for searches to be normalized (lowercase, punctuation, diacritics, partials) so that small differences don't stop a match. `ToNormalized()` in `Features/Books/Search/Helpers/StringExtensions.cs` does this, and `BookSearchService` runs it on the query before sending it to Gemini. When matching against Open Library is built, its titles and author names should go through the same method, so both sides of a comparison follow identical rules.
+The brief asks for searches to be normalized (lowercase, punctuation, diacritics, partials) so that small differences don't stop a match. `ToNormalized()` in `Features/Books/Search/Helpers/StringExtensions.cs` does this, and `BookSearchService` runs it on the user's search, and on the title, author and keywords Gemini reads from it before they are sent to Open Library. When matching against Open Library is built, its titles and author names should go through the same method, so both sides of a comparison follow identical rules.
+
+The rules are chosen for Open Library's search. Each one was checked against the live API, because its `title` and `author` fields are stricter than `q`: a form that `q` forgives can find nothing in a field.
 
 It applies these rules in order:
 
@@ -170,23 +199,143 @@ It applies these rules in order:
 | Accents are removed from Latin letters | `Brontë` → `bronte`, `García Márquez` → `garcia marquez` |
 | Latin letters with no accent to strip are spelled plainly | `Søren` → `soren`, `Straße` → `strasse`, `Łódź` → `lodz` |
 | Everything is lowercased | `The Hobbit` → `the hobbit` |
-| Full stops and apostrophes are dropped without a space | `J.R.R.` → `jrr`, `O'Brien` → `obrien`, `Philosopher’s` → `philosophers` |
-| `&` becomes "and" | `Pride & Prejudice` → `pride and prejudice` |
-| Other punctuation, symbols and emoji become spaces | `spider-man` → `spider man`, `Dune: Messiah` → `dune messiah` |
+| Apostrophes inside a word are kept, as a plain `'` | `O’Brien` → `o'brien`, `Philosopher’s` → `philosopher's` |
+| Apostrophes at the start or end of a word are dropped | `'Dune'` → `dune`, `authors'` → `authors` |
+| Full stops, `&` and other punctuation, symbols and emoji become spaces | `J.R.R.` → `j r r`, `Pride & Prejudice` → `pride prejudice`, `spider-man` → `spider man`, `Dune: Messiah` → `dune messiah` |
 | Invisible characters are removed | zero-width spaces, soft hyphens, byte-order marks |
 | All whitespace collapses to single spaces | tabs, new lines and non-breaking spaces |
-| Spaced initials are joined | `J. R. R. Tolkien` → `jrr tolkien`, so it matches `JRR Tolkien` |
+
+What Open Library returned for each form (works found):
+
+| Rule | Form we send | Works | Other form | Works |
+|---|---|---|---|---|
+| Initials stay apart | `author=j r r tolkien` | 352 | `author=jrr tolkien` | 0 |
+| | `author=j d salinger` | 44 | `author=jd salinger` | 0 |
+| | `author=h g wells` | 9,967 | `author=hg wells` | 12 |
+| Apostrophes are kept | `author=tim o'brien` | 132 | `author=tim obrien` | 8 |
+| | `author=flannery o'connor` | 101 | `author=flannery oconnor` | 4 |
+| | `title=the handmaid's tale` | 57 | `title=the handmaid s tale` | 0 |
+| `&` is dropped | `title=war peace` | 5,069 | `title=war and peace` | 3,773 |
+| Accents and letters are folded | `author=soren kierkegaard` | 1,102 | `author=Søren Kierkegaard` | 0 |
+| | `author=gabriel garcia marquez` | 498 | `author=Gabriel García Márquez` | 0 |
+| | `title=die strasse` | 317 | `title=die straße` | 0 |
 
 Decisions behind these rules:
 
 - **Accents are stripped only from Latin letters.** In other scripts a mark can turn one letter into another: Russian `й` is a different letter from `и`, so `Война` must not become `воина`. Cyrillic, Greek, Devanagari and other scripts keep their marks and are only lowercased.
-- **Full stops join letters instead of splitting them.** This is what makes `J.R.R. Tolkien` equal `JRR Tolkien`. The cost is that a decimal such as `2.0` becomes `20`, which is rare in a book search.
-- **Some apostrophes count as letters in Unicode** (`ʼ`, U+02BC). The apostrophe rule runs before the letter check so they're dropped like the others.
+- **Initials are kept apart, not joined.** Open Library's author field indexes `J.R.R. Tolkien` as separate letters, so `jrr tolkien` finds nothing. The cost is that a search typed as `JRR Tolkien` stays `jrr tolkien`. Gemini usually spells the author out properly (`J.R.R. Tolkien`), which normalizes to the form that works. A decimal such as `2.0` becomes `2 0`, which is rare in a book search.
+- **Apostrophes are kept inside words.** Names like O'Brien and O'Connor are indexed with the apostrophe, and removing it or turning it into a space loses most of their books. Possessives such as `philosopher's` match as well as `philosophers` does. Every kind of apostrophe (`’`, `‘`, `ʼ`, `` ` ``) becomes a plain `'`, because the curly one finds nothing in a title.
+- **A lone apostrophe is never sent.** One at the start or end of a word is dropped, so a stray `'` can't reach Open Library, which refuses it.
+- **`&` is dropped rather than turned into "and".** Titles written with `&` don't contain the word "and", so sending it narrows the search. Dropping it finds both spellings.
+- **Lowercasing also keeps queries safe.** Open Library reads `AND`, `OR` and `NOT` in capitals as search operators, so `War AND Peace` is a different search from `war and peace`. A bare `AND` even returns a server error.
+- **Some apostrophes count as letters in Unicode** (`ʼ`, U+02BC). The apostrophe rule runs before the letter check so they're handled like the others.
 - **Small words are kept.** The brief's "partials" example (`tale two cities` should match `A Tale of Two Cities`) is about comparing two texts, not cleaning one. Dropping words like "a" and "of" here would empty titles made entirely of them, such as *It*. Ignoring them is left to the matching step.
-- **A search can normalize to nothing.** `!!!` passes the controller's validation, because it isn't blank, but normalizes to an empty string.
+- **A search can normalize to nothing.** `!!!` passes the controller's validation, because it isn't blank, but normalizes to an empty string. `BookSearchService` then returns no results straight away, without calling Gemini or Open Library, since neither has anything to work with.
 - **Running it twice changes nothing.** The output of `ToNormalized()` is already in normal form, so text that has been cleaned once can safely be cleaned again.
 - **The response echoes what the user typed.** `query` in the response is the original search, not the normalized one, so the page can show it back as entered.
 - **It is named `ToNormalized()`, not `Normalize()`.** `string` already has an instance method `Normalize()`, and C# always prefers an instance method over an extension method with the same name, so an extension called `Normalize()` would never run.
 - **It lives in the feature's `Helpers/` folder,** not in `Common/`. These rules exist for matching book titles and author names. If another feature needs them later, the class can move to `Common/`.
 
 `StringExtensionsTests` covers each rule, the brief's own examples and the edge cases above.
+
+## Pending until later steps are built
+
+Search works from end to end, but some steps the brief asks for aren't built yet. Until they are, the search uses the stand-ins below. Each one is marked in the code and should be removed when the step that replaces it lands.
+
+| Stand-in now | Why | Replaced by |
+|---|---|---|
+| **Every result has tier `E`.** `BookResultMapper.UnrankedTier` | `tier` is required on every result, and `E` is the brief's "no clear winner" level, the only honest level before anything is ranked. | Ranking with the brief's hierarchy (exact title and primary author first, author-only fallback last), which gives each result its real tier. |
+| **Explanations are built from Open Library's fields:** *Open Library lists "The Hobbit" by J.R.R. Tolkien, first published in 1937.* | `explanation` is required, and the brief wants it grounded in fetched data. This sentence only uses fields Open Library returned. | Gemini writing each explanation from the fetched fields. The template sentence should stay as the fallback when Gemini is unavailable or gives no answer. |
+| **The author is the first name in `author_name`.** | It is usually the real author, but `author_name` also lists illustrators, adapters and translators. For the Dixon graphic novel of *The Hobbit*, the result currently shows "Charles Dixon". | Resolving primary authors from the work record's `authors` list (`GetWorkAsync`, after checking `IsWork`), so contributors are kept apart. |
+| **Results are the first five distinct works, in reading order.** | Works are de-duplicated by key only, and the most likely reading's works come first. Different works for the same book (for example two *Pride and Prejudice* records) both appear. | Consolidating works into canonical works, then ranking. |
+
+These are settled and stay as they are:
+
+- **Each reading is searched in parallel,** asking for 10 works each, so ranking has more than five candidates to choose from.
+- **When Gemini gives no readings,** the normalized search is sent to Open Library instead, so a Gemini problem doesn't mean no results.
+- **A refused reading is handled per search,** so one refused reading doesn't lose the others.
+
+## Nice to have
+
+Ideas that would help but aren't needed for the brief.
+
+### Weighted readings decide how many results each reading gets
+
+Today every reading is treated the same: Open Library is searched for each one, and the five results are filled in reading order, so the most likely reading's works crowd out the rest whether Gemini was sure of it or not.
+
+If each reading carried a weight, a confidence between 0 and 1 that it is what the user meant, the five result slots could be shared out in proportion to those weights:
+
+| Gemini's readings | Weights | Results |
+|---|---|---|
+| One clear reading | 0.9, 0.1 | 4–5 books from the first reading, at most 1 from the second |
+| Two equally likely readings | 0.5, 0.5 | Books from both, split evenly |
+| Nothing stands out | 0.4, 0.3, 0.3 | A spread across all three readings |
+
+When Gemini is confident, the list concentrates on the books it is sure about. When it isn't, the list covers more possibilities instead of betting everything on one guess. The weights could also order the results and help pick each one's tier.
+
+This would mean:
+
+- **Asking Gemini for a weight** on each reading, by adding a `weight` property to `QueryReading`, so the generated schema asks for it too.
+- **Making the weights add up to 1** before using them, since Gemini's numbers won't always.
+- **Rounding to whole slots** so the five slots are always filled, and handing a reading's unused slots to the next one when its search finds fewer works.
+- **Not trusting the numbers too much.** Gemini's confidence is a rough signal, not a measured probability, so it should be checked against real searches before it changes the results much.
+
+### A request ID on every log line and response
+
+One search writes log lines from HTTP logging, Gemini, Open Library and, on failure, the exception handler, and nothing in the console output ties them together. Two steps, each useful on its own:
+
+- **Show logging scopes.** ASP.NET Core already runs each request in a scope holding its own `RequestId` and `TraceId`, but the console logger hides scopes by default. Setting `Logging:Console:FormatterOptions:IncludeScopes` to `true` in `appsettings.json` puts them on every line, with no new code.
+- **Return the ID to the caller.** A `RequestIdMiddleware` in `Middleware/` would read an `X-Request-Id` header from the caller, or make a new ID, put it in a logging scope, and send it back in the response's `X-Request-Id` header. A user who sees a `502` could then quote the ID, and it would match the logs.
+
+Details for the middleware:
+
+- **It runs first,** before `UseExceptionHandler()`, so the exception handler's own log line falls inside the scope and error responses carry the header too.
+- **It sets the header in `Response.OnStarting`,** because the exception handler clears the response before it writes a `502` or `500`.
+- **A caller's ID is used only when it is short and plain** (letters, digits and `._:-`, up to 64 characters). Anything else is replaced, so a crafted header can't write fake lines or control characters into the logs.
+- **Its scope should be named `CorrelationId`,** not `RequestId`, because ASP.NET Core's built-in scope already uses `RequestId` and every line would show two different IDs under the same name.
+
+### Searches in more languages
+
+Search is built for languages written in the Latin alphabet, the ones whose letters can be reduced to plain English letters. `ToNormalized()` folds `Brontë` to `bronte` and `Søren` to `soren`, so a search typed without accents still matches. Other scripts get much less help:
+
+- **Other scripts aren't converted to Latin letters.** Cyrillic, Greek and other scripts are kept and lowercased, but not transliterated, so `Война и мир` and `voyna i mir` don't match each other, and neither matches the English title *War and Peace*.
+- **Languages without spaces between words** (Chinese, Japanese, Thai) stay one long block of text, so matching on individual words, as the "partials" rule needs, doesn't work for them.
+- **Accents are left on non-Latin letters on purpose,** because there a mark can make a different letter (see the normalization decisions above), so folding can't simply be extended to them.
+
+Supporting more languages would mean transliterating each script into Latin letters (for example with ICU's transliterator), splitting words in scripts that don't use spaces, matching against a work's titles in other languages as well as its main title, and passing the user's language to Open Library through `WorkSearchRequest.Language`.
+
+### A token limit on Gemini calls
+
+Nothing limits how many tokens Gemini may spend on an answer. The reading prompt asks for a few short readings, so answers are small today, but an answer that runs long costs more, takes longer and uses up the free tier's quota sooner. `GeminiClient` already logs the tokens each call used.
+
+- **Cap each answer.** `GenerationConfig` already has `MaxOutputTokens`; `BookSearchService` doesn't set it yet. The limit should come from the token counts in the logs, with room to spare, and live in configuration (for example `Gemini:MaxOutputTokens`) so it can change without a release.
+- **A cut-off answer is already safe.** If Gemini hits the limit mid-answer, it stops with finish reason `MAX_TOKENS` and the JSON is incomplete. `BookSearchService` treats invalid JSON as no readings and falls back to searching the normalized query, so the user still gets results. The warning it logs would show when the limit is too low.
+- **The input is already bounded.** The controller rejects searches over 200 characters, so the prompt can't grow with what the user types.
+- **A budget over time** (tokens per minute or per day) would go further, refusing or queueing calls once the budget is spent. That matters only when many people use the site.
+
+### One place to configure the search limits
+
+The three numbers that shape every search are constants in `BookSearchService`:
+
+| Constant | What it limits | Now |
+|---|---|---|
+| `MaxReadings` | How many readings Gemini returns for one search | 8 |
+| `MaxWorksPerSearch` | How many works Open Library returns for each reading's search | 10 |
+| `MaxResults` | How many distinct books the client receives | 10 (the `.Take` that applies it is commented out) |
+
+Changing any of them means editing code and releasing. Moving them into one `BookSearchOptions` class, bound from a `BookSearch` section in `appsettings.json` the same way `GeminiOptions` and `OpenLibraryOptions` are, would put them in one place and let each environment set its own:
+
+```json
+"BookSearch": {
+  "MaxReadings": 8,
+  "MaxWorksPerSearch": 10,
+  "MaxResults": 5
+}
+```
+
+Things to handle when this is built:
+
+- **Check the values at startup** with `ValidateOnStart`, like the integrations do, so a zero or negative limit stops the app instead of quietly returning nothing.
+- **The prompt and the schema depend on `MaxReadings`.** The prompt says "Return {MaxReadings} readings", and the generated JSON schema sets `maxItems` from it. Both are built once into static fields today, so they would need to be built from the options instead.
+- **The numbers multiply.** A search makes up to `MaxReadings` Open Library calls of `MaxWorksPerSearch` works each, so 8 × 10 is up to 80 works fetched to return `MaxResults`. Raising either one raises Open Library's load and the time spent waiting on it.
+- **The brief asks for at most 5 results.** `MaxResults` should default to 5, with anything higher treated as a deliberate choice.

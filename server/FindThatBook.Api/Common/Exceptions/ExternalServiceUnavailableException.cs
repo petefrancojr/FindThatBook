@@ -1,6 +1,6 @@
 using System.Net;
 
-namespace FindThatBook.Api.Common.Errors;
+namespace FindThatBook.Api.Common.Exceptions;
 
 /// <summary>
 /// An external service we depend on (Gemini, Open Library) couldn't give us an answer:

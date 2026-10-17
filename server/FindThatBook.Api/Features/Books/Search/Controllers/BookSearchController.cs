@@ -1,6 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using FindThatBook.Api.Features.Books.Search.Services;
-using FindThatBook.Api.Features.Books.Search.Models;
+using FindThatBook.Api.Features.Books.Search.DTOs;
 using Microsoft.AspNetCore.Mvc;
 
 namespace FindThatBook.Api.Features.Books.Search.Controllers;

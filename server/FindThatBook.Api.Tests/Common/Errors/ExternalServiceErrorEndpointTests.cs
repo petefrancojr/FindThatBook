@@ -1,8 +1,9 @@
 using System.Net;
 using System.Text.Json;
-using FindThatBook.Api.Features.Books.Search.Models;
+using FindThatBook.Api.Features.Books.Search.DTOs;
 using FindThatBook.Api.Features.Books.Search.Services;
 using FindThatBook.Api.Integrations.Gemini;
+using FindThatBook.Api.Integrations.Gemini.Exceptions;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;

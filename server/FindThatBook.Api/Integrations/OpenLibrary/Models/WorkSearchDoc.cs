@@ -57,4 +57,12 @@ public class WorkSearchDoc
     /// <summary>The work's ID without its path, for example "OL27482W". Null when there is no key.</summary>
     [JsonIgnore]
     public string? WorkId => OpenLibraryKeys.ToId(Key);
+
+    /// <summary>
+    /// False for an edition that was never attached to a work. Search lists it as a work under the
+    /// edition's own ID ("/works/OL8866470M"), and there is no work record to get for it, so only call
+    /// <see cref="IOpenLibraryClient.GetWorkAsync"/> when this is true.
+    /// </summary>
+    [JsonIgnore]
+    public bool IsWork => OpenLibraryKeys.IsWorkId(WorkId);
 }

@@ -1,3 +1,4 @@
+using FindThatBook.Api.Integrations.OpenLibrary.Exceptions;
 using FindThatBook.Api.Integrations.OpenLibrary.Models;
 
 namespace FindThatBook.Api.Integrations.OpenLibrary;
@@ -8,7 +9,8 @@ namespace FindThatBook.Api.Integrations.OpenLibrary;
 /// how to match, merge and rank it.
 /// </summary>
 /// <remarks>
-/// Methods that take an ID accept it bare ("OL27482W") or as a key ("/works/OL27482W").
+/// Methods that take an ID accept only the bare ID ("OL27482W", in any case), not the key ("/works/OL27482W").
+/// Models give the bare form through WorkId, AuthorId and KeyReference.Id.
 /// Every method throws <see cref="OpenLibraryUnavailableException"/> when Open Library can't be
 /// reached, times out, returns an error status or returns something that isn't JSON.
 /// </remarks>
@@ -16,9 +18,13 @@ public interface IOpenLibraryClient
 {
     /// <summary>
     /// Searches works (/search.json). A search with no matches returns an empty
-    /// <see cref="WorkSearchResponse.Docs"/> list, not an error.
+    /// <see cref="WorkSearchResponse.Docs"/> list, not an error. Some docs are editions that were never
+    /// attached to a work; check <see cref="WorkSearchDoc.IsWork"/> before getting the work.
     /// </summary>
     /// <exception cref="ArgumentException">The request has no query, title, author or subject.</exception>
+    /// <exception cref="OpenLibraryQueryRejectedException">
+    /// Open Library refused the query, for example "the" or anything under 3 characters.
+    /// </exception>
     Task<WorkSearchResponse> SearchWorksAsync(WorkSearchRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>Gets one work (/works/{id}.json). Returns null when there is no such work.</summary>

@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using FindThatBook.Api.Integrations.Gemini;
+using FindThatBook.Api.Integrations.Gemini.Exceptions;
 using FindThatBook.Api.Integrations.Gemini.Models;
 using FindThatBook.Api.Tests.TestSupport;
 using Microsoft.Extensions.Logging.Abstractions;
