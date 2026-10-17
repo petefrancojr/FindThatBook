@@ -9,6 +9,14 @@ A small library discovery app. A reader types a messy search such as `austen ben
 
 The only requirement is Docker. .NET and Node run inside containers, so neither needs to be installed locally.
 
+Search uses Google's Gemini API, which needs a key. Get one from [Google AI Studio](https://aistudio.google.com/apikey), then copy `.env.example` to `.env` at the repo root and fill it in:
+
+```
+GEMINI_API_KEY=your-key-here
+```
+
+`.env` is gitignored, and docker compose reads it automatically. The API starts without a key, but any search that needs Gemini returns `502` until one is set.
+
 ```
 docker compose up --build
 ```
@@ -27,6 +35,12 @@ docker compose run --rm client-tests
 - `client-tests` runs the Angular unit tests with Vitest in a Node container. Tests use jsdom, so no browser is needed.
 
 Both services are in a Compose profile, so `docker compose up` doesn't start them.
+
+A few server tests call the real Gemini API. They are skipped by default so the suite never depends on the network or spends quota. With a key in `.env`, run them with:
+
+```
+docker compose run --rm -e LIVE_TESTS=true server-tests dotnet test FindThatBook.Api.Tests --filter Category=Live
+```
 
 ## Regenerating the API client
 
@@ -62,14 +76,17 @@ Search currently returns dummy data.
 The server groups code by feature (a vertical slice) instead of keeping all controllers in one folder and all models in another:
 
 ```
-server/FindThatBook.Api/Features/
-├── Books/
-│   └── Search/
-│       ├── Controllers/
-│       ├── Models/
-│       └── Services/     business logic
-└── Health/
-    └── Controllers/
+server/FindThatBook.Api/
+├── Features/
+│   ├── Books/
+│   │   └── Search/
+│   │       ├── Controllers/
+│   │       ├── Models/
+│   │       └── Services/     business logic
+│   └── Health/
+│       └── Controllers/
+├── Integrations/             clients for external services, shared by features
+└── Common/                   cross-cutting setup (OpenAPI)
 ```
 
 Everything related to one feature sits in one place. Changing how book search works means opening one folder, not hunting through several. A new feature is added as a new folder next to the existing ones and doesn't touch them.
@@ -78,28 +95,40 @@ The top-level folder is named `Features` rather than `Domains`. In clean archite
 
 ### API response models are kept apart from external data
 
-Open Library and Gemini will sit next to `Search` inside the Books feature. Each will own its client and a `Models/` folder that mirrors that service's JSON:
+The Open Library and Gemini clients live in a top-level `Integrations/` folder, next to `Features/`. Other features are likely to need them later, so they sit where any feature can find and reuse them. Each one owns its client, behind an interface, and a `Models/` folder that mirrors that service's JSON. Gemini is built; Open Library is next:
 
 ```
-Features/Books/
-├── BooksFeature.cs        registers the feature's services
-├── Search/
-│   ├── Controllers/
-│   ├── Models/            the API contract: what /api/books/search returns
-│   └── Services/          search logic: calls the clients, maps their data, ranks
-├── OpenLibrary/
-│   ├── OpenLibraryClient.cs
-│   └── Models/            Open Library's JSON, field for field
-└── Gemini/
-    ├── GeminiClient.cs
-    └── Models/            Gemini's request/response wrappers and the JSON we ask it to return
+server/FindThatBook.Api/
+├── Features/Books/
+│   ├── BooksFeature.cs        registers the feature's services
+│   └── Search/
+│       ├── Controllers/
+│       ├── Models/            the API contract: what /api/books/search returns
+│       └── Services/          search logic: prompts, mapping, consolidation, ranking
+└── Integrations/
+    ├── OpenLibrary/
+    │   ├── IOpenLibraryClient.cs, OpenLibraryClient.cs
+    │   ├── OpenLibraryRegistration.cs   AddOpenLibrary()
+    │   └── Models/            Open Library's JSON, field for field
+    └── Gemini/
+        ├── IGeminiClient.cs, GeminiClient.cs
+        ├── GeminiRegistration.cs        AddGemini()
+        └── Models/            Gemini's request/response wrappers
 ```
 
 Rules for this layout:
 
+- **Integrations stay general.** A client describes what its service can do (search, fetch a work, generate content), never what book search needs. The prompts we send Gemini and the JSON we ask it to return belong to the feature that uses them, which keeps each client reusable.
+- **Integrations never reference features.** They don't know about `BookResult`, tiers or each other. A feature injects the interface it needs. Because of this one-way rule, `Integrations/` could later move into its own class library without changes.
 - **Each `Models/` folder has one owner.** `Search/Models` is our public contract and changes only when we change the API. `OpenLibrary/Models` and `Gemini/Models` copy another service's JSON and change only when that service does.
-- **External models stop at the search service.** `BookSearchService` maps Open Library and Gemini data into our own types. Controllers and API responses never expose them, so a change on Open Library's side doesn't change our API.
-- **The mapping step holds the real decisions.** Merging editions into works and separating primary authors from contributors happens while mapping Open Library data. Keeping that mapping in its own class makes it easy to find and to test with recorded Open Library JSON.
+- **External models stop at the feature.** `BookSearchService` maps Open Library and Gemini data into our own types. Controllers and API responses never expose them, so a change on Open Library's side doesn't change our API.
+- **The mapping step holds the real decisions.** Merging editions into works and separating primary authors from contributors happens while mapping Open Library data in the feature. Keeping that mapping in its own class makes it easy to find and to test with recorded Open Library JSON.
 - **External models are named after their source,** for example `WorkRecord` and `AuthorRecord`, so they aren't confused with our `BookResult`.
 
-The clients stay inside `Features/Books` because only Books uses them. If another feature ever needs Open Library, the folder moves up a level.
+### An unavailable external service is a 502
+
+When Gemini (or, later, Open Library) can't give an answer, its client throws an exception derived from `ExternalServiceUnavailableException` in `Common/Errors`. That covers a network failure, a timeout, a rejected API key, rate limiting or a server error. `ExternalServiceExceptionHandler` turns it into a `502` ProblemDetails response that names the service ("Gemini is unavailable right now. Try again in a moment."). The underlying reason is logged but never sent to the client.
+
+An answer that arrives but isn't usable, such as a blocked prompt or empty text, is not an error at the client level. The Gemini client returns it with `Text` set to null, and the feature that asked decides what to do, for example falling back to a template explanation.
+
+The Gemini API key is sent in the `x-goog-api-key` header rather than the URL, so it never appears in request logs.

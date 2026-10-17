@@ -18,7 +18,6 @@ export class Search {
   protected readonly error = signal<string | null>(null);
 
   protected readonly canSearch = computed(() => this.query().trim().length > 0 && !this.loading());
-
   protected onInput(event: Event): void {
     this.query.set((event.target as HTMLInputElement).value);
   }

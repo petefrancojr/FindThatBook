@@ -8,11 +8,6 @@ public static class DummyBookData
     public static BookSearchResponse Search(string query) => new()
     {
         Query = query,
-        InterpretedAs = new InterpretedQuery
-        {
-            Title = "Pride and Prejudice",
-            Author = "Jane Austen"
-        },
         Results =
         [
             new BookResult

@@ -26,13 +26,21 @@ public class BookSearchEndpointTests(WebApplicationFactory<Program> factory)
 
         var root = json.RootElement;
         Assert.True(root.TryGetProperty("query", out _));
-        Assert.True(root.TryGetProperty("interpretedAs", out _));
 
         var book = root.GetProperty("results")[0];
         foreach (var field in new[] { "title", "author", "first_publish_year", "open_library_id", "url", "cover_url", "tier", "explanation" })
         {
-            Assert.True(book.TryGetProperty(field, out _), $"Missing field '{field}'");
+            Assert.True(book.TryGetProperty(field, out _), $"Missing result field '{field}'");
         }
+    }
+
+    [Fact]
+    public async Task Search_ReturnsAtMostFiveResults()
+    {
+        var response = await _client.GetAsync("/api/books/search?q=austen%20bennet");
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+        Assert.InRange(json.RootElement.GetProperty("results").GetArrayLength(), 0, 5);
     }
 
     [Theory]

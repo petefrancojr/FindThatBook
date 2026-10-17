@@ -37,7 +37,6 @@ public class BookSearchControllerTests
         public BookSearchResponse Response { get; } = new()
         {
             Query = "austen bennet",
-            InterpretedAs = new InterpretedQuery(),
             Results = []
         };
 

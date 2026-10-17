@@ -3,6 +3,7 @@ namespace FindThatBook.Api.Features.Books.Search.Models;
 public class BookSearchResponse
 {
     public required string Query { get; init; }
-    public required InterpretedQuery InterpretedAs { get; init; }
+
+    /// <summary>One ranked list of up to five books, best first.</summary>
     public required IReadOnlyList<BookResult> Results { get; init; }
 }

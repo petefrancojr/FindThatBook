@@ -9,7 +9,6 @@ export { Api } from './api';
 
 export type { BookResult } from './models/book-result';
 export type { BookSearchResponse } from './models/book-search-response';
-export type { InterpretedQuery } from './models/interpreted-query';
 export type { ProblemDetails } from './models/problem-details';
 export type { ValidationProblemDetails } from './models/validation-problem-details';
 export { BaseService } from './base-service';

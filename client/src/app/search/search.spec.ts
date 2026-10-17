@@ -31,7 +31,6 @@ describe('Search', () => {
 
   const response = (results: BookResult[], query = 'tolkien hobbit'): BookSearchResponse => ({
     query,
-    interpretedAs: { title: 'The Hobbit', author: 'J.R.R. Tolkien' },
     results,
   });
 

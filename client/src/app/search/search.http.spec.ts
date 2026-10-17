@@ -13,7 +13,6 @@ describe('Search (HTTP)', () => {
 
   const response: BookSearchResponse = {
     query: 'austen bennet',
-    interpretedAs: { title: 'Pride and Prejudice', author: 'Jane Austen' },
     results: [
       {
         title: 'Pride and Prejudice',
