@@ -1,6 +1,9 @@
 namespace FindThatBook.Api.Features.Books.Search.Models;
 
-/// <summary>The JSON Gemini returns for the query-reading prompt: { "readings": [ ... ] }.</summary>
+/// <summary>
+/// The JSON Gemini returns for the query-reading prompt: { "readings": [ ... ] }.
+/// Used inside <see cref="Services.BookSearchService"/>; never sent to the client.
+/// </summary>
 public class QueryReadings
 {
     private readonly IReadOnlyList<QueryReading> _readings = [];

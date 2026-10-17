@@ -82,7 +82,7 @@ server/FindThatBook.Api/
 │   │   └── Search/
 │   │       ├── Controllers/
 │   │       ├── Helpers/      small extensions used only by this feature
-│   │       ├── Models/
+│   │       ├── Models/       all of the feature's models
 │   │       └── Services/     business logic
 │   └── Health/
 │       └── Controllers/
@@ -104,7 +104,7 @@ server/FindThatBook.Api/
 │   ├── BooksFeature.cs        registers the feature's services
 │   └── Search/
 │       ├── Controllers/
-│       ├── Models/            the API contract: what /api/books/search returns
+│       ├── Models/            all of the feature's models: the API response and the ones used inside search
 │       └── Services/          search logic: prompts, mapping, consolidation, ranking
 └── Integrations/
     ├── OpenLibrary/
@@ -121,7 +121,7 @@ Rules for this layout:
 
 - **Integrations stay general.** A client describes what its service can do (search, fetch a work, generate content), never what book search needs. The prompts we send Gemini and the JSON we ask it to return belong to the feature that uses them, which keeps each client reusable.
 - **Integrations never reference features.** They don't know about `BookResult`, tiers or each other. A feature injects the interface it needs. Because of this one-way rule, `Integrations/` could later move into its own class library without changes.
-- **Each `Models/` folder has one owner.** `Search/Models` is our public contract and changes only when we change the API. `OpenLibrary/Models` and `Gemini/Models` copy another service's JSON and change only when that service does.
+- **Each `Models/` folder has one owner.** `Search/Models` holds all of the search feature's models. Some form the API response (`BookSearchResponse`, `BookResult`) and change only when we change the API. Others are used only inside the feature and never reach the client, such as `QueryReadings` and `QueryReading`, which hold the answer `BookSearchService` gets from Gemini. `OpenLibrary/Models` and `Gemini/Models` copy another service's JSON and change only when that service does.
 - **External models stop at the feature.** `BookSearchService` maps Open Library and Gemini data into our own types. Controllers and API responses never expose them, so a change on Open Library's side doesn't change our API.
 - **The mapping step holds the real decisions.** Merging editions into works and separating primary authors from contributors happens while mapping Open Library data in the feature. Keeping that mapping in its own class makes it easy to find and to test with recorded Open Library JSON.
 - **External models are named after their source,** for example `WorkRecord` and `AuthorRecord`, so they aren't confused with our `BookResult`.

@@ -1,6 +1,9 @@
 namespace FindThatBook.Api.Features.Books.Search.Models;
 
-/// <summary>One way Gemini read the search: the book it may be, and the words left over.</summary>
+/// <summary>
+/// One way Gemini read the search: the book it may be, and the words left over.
+/// Used inside <see cref="Services.BookSearchService"/>; never sent to the client.
+/// </summary>
 public class QueryReading
 {
     private readonly IReadOnlyList<string> _keywords = [];
