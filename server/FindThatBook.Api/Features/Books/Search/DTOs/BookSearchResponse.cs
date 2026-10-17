@@ -1,4 +1,3 @@
-using FindThatBook.Api.Features.Books.Search.Models;
 
 namespace FindThatBook.Api.Features.Books.Search.DTOs;
 

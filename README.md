@@ -5,6 +5,41 @@ A small library discovery app. A reader types a messy search such as `austen ben
 - **Server:** .NET 10 Web API (`server/`)
 - **Client:** Angular (`client/`)
 
+## Overview
+
+The reader types one free-text search into the Angular page. The page calls `GET /api/books/search?q=…`, and the API turns the search into an ordered list of books in stages:
+
+```
+"tolkien hobbit illustrated deluxe 1937"
+   │
+   ▼  Reading        Gemini reads the search into readings: { title?, author?, keywords[] }, most likely first
+   ▼  Finding        Open Library's /search.json is searched once per reading, in parallel
+   ▼  Authors        each work's primary authors are told apart from adapters, illustrators and translators
+   ▼  Consolidation  duplicate works for the same book are merged into one canonical work
+   ▼  Ranking        each work gets a tier, A to E, by comparing it with the most likely reading
+   ▼  Explanation    Gemini writes one sentence per returned book, from the facts behind its tier
+   ▼  Mapping        the books become the response: title, author, year, ID, link, cover, tier, explanation
+   │
+   ▼
+1. The Hobbit · J.R.R. Tolkien · 1937 · A · "Exact title; J.R.R. Tolkien is primary author."
+```
+
+Gemini does the two jobs that need language: understanding the messy search, and writing the explanations. Everything that must be the same every time, such as normalizing text, merging duplicates, telling authors from contributors and choosing tiers, is done by rules in code, which the tests check directly. Each stage has its own folder under `server/FindThatBook.Api/Features/Books/Search/Pipeline/`.
+
+## Features
+
+- **One free-text search box** that accepts sparse (`dickens`), dense (`tolkien hobbit illustrated deluxe 1937`) and ambiguous (`austen bennet`) searches.
+- **AI reading of the search** with Gemini, returning structured JSON checked against a schema generated from the C# model. See [Overview](#overview).
+- **Open Library search** using each reading's title, author and keywords in their own fields. See [The Open Library client returns Open Library's data as it is](#the-open-library-client-returns-open-librarys-data-as-it-is).
+- **Text normalization** for case, punctuation, accents, initials and apostrophes, tuned to what Open Library's fields match. See [Search text is normalized before it is read](#search-text-is-normalized-before-it-is-read).
+- **Duplicate works merged** into one canonical work, including subtitle variants. See [Duplicate works are merged into one canonical work](#duplicate-works-are-merged-into-one-canonical-work).
+- **Primary authors told apart from contributors**, so Dixon's graphic novel of *The Hobbit* credits Tolkien. See [Primary authors are told apart from contributors](#primary-authors-are-told-apart-from-contributors).
+- **The brief's matching hierarchy**, tiers A to E, with results ordered best first. See [Tiers are decided by rules; Gemini only explains them](#tiers-are-decided-by-rules-gemini-only-explains-them).
+- **A grounded explanation for each book**, naming the primary author and contributors, with a plain sentence from Open Library's fields when Gemini can't give one.
+- **Error handling:** `400` for a missing or too-long search, `422` with Open Library's reason when it refuses a search, `502` when Gemini or Open Library is down, and `200` with no books for a search like `!!!`. See [An unavailable external service is a 502](#an-unavailable-external-service-is-a-502).
+- **A results page** that shows each book's cover, title linked to Open Library, author, year, ID and explanation, in the API's order, with loading, empty and error states.
+- **Tests** for every server requirement in the brief, and for the client. See [Testing strategy](#testing-strategy).
+
 ## Running
 
 The only requirement is Docker. .NET and Node run inside containers, so neither needs to be installed locally.
@@ -42,6 +77,31 @@ A few server tests call the real Gemini API. They are skipped by default so the 
 docker compose run --rm -e LIVE_TESTS=true server-tests dotnet test FindThatBook.Api.Tests --filter Category=Live
 ```
 
+### Testing strategy
+
+Every server requirement in the brief has tests, and none of them touch the network: Gemini and Open Library are replaced by fakes (`FakeGeminiClient`, `FakeOpenLibraryClient`), and the HTTP clients are tested against a stub handler with recorded JSON. The tests mirror the code's folders, so each pipeline stage's tests sit in the matching folder under `FindThatBook.Api.Tests/Features/Books/Search/Pipeline/`.
+
+- **Pure stages are tested directly,** with small built works and candidates (`TestSupport/Books.cs`): authors, consolidation, ranking and mapping.
+- **Stages that call a service are tested against a fake of it:** the reader and explainer against a fake Gemini, the finder against a fake Open Library.
+- **`BookSearchService` is tested with fakes of its stages,** so each test checks the order and limits of the search on its own.
+- **`BookSearchEndpointTests` runs whole searches through ASP.NET and every stage,** with only Gemini and Open Library faked, to check the response the brief describes and its error statuses.
+
+| Brief requirement | Tests |
+|---|---|
+| 1. Accept sparse, dense and ambiguous searches | `BookSearchServiceTests`, `BookSearchEndpointTests` (the brief's own examples), `PersonNamesTests` (partial names) |
+| 2a. AI extracts `{ title?, author?, keywords[] }` | `GeminiQueryReaderTests` |
+| 2b. A grounded "why it matched" explanation | `GeminiCandidateExplainerTests`, `BookResultMapperTests` (fallback sentence) |
+| 3a. Search `/search.json`; fetch `/works`, `/authors`, `/authors/{id}/works` | `OpenLibraryClientTests`, `OpenLibraryCandidateFinderTests` |
+| 3b. Normalize: lowercase, punctuation, diacritics, partials | `StringExtensionsTests`, `CandidateRankerTests` (*tale two cities*) |
+| 3b.i. Subtitle variants | `WorkConsolidatorTests`, `CandidateRankerTests` |
+| 3b.ii. Canonical works and primary authors | `WorkConsolidatorTests`, `PrimaryAuthorResolverTests` |
+| 4. Matching hierarchy A to E | `CandidateRankerTests`, `BookSearchServiceTests` |
+| Data quality note: contributors are lower signal and explanations name them | `PrimaryAuthorResolverTests`, `CandidateRankerTests` (tier B), `GeminiCandidateExplainerTests` |
+| Return results: title, primary author, year, ID and link, cover, explanation, ordered | `BookResultMapperTests`, `BookSearchEndpointTests` |
+| Error handling: 400, 422, 502 | `BookSearchEndpointTests`, `ExternalServiceErrorEndpointTests`, `GeminiClientTests`, `OpenLibraryClientTests` |
+
+Not covered: the optional AI re-ranking (2c), which isn't built. The brief's "up to 5" results is tested as 10, the limit chosen for this app.
+
 ## Regenerating the API client
 
 The Angular services and models in `client/src/api/generated/` are generated by [ng-openapi-gen](https://github.com/cyclosproject/ng-openapi-gen) from the API's OpenAPI document (`/openapi/v1.json`, published in Development). Don't edit them by hand. After changing a controller or a response model, regenerate them:
@@ -69,6 +129,16 @@ The generated client uses `http://api:8080/` as its default root URL because tha
 
 Search runs in steps: Gemini reads the search into readings, Open Library is searched once per reading, each work's primary authors are worked out, duplicate works are merged, the works are ranked against the most likely reading using the brief's tiers A to E, and Gemini explains the ten that are returned.
 
+## Assumptions
+
+- **.NET 10 instead of .NET 8.** The brief asks for a .NET 8 Web API. The server targets .NET 10, the current long-term support release. Moving it to .NET 8 would need small changes: for example, the Gemini response schemas are generated with `JsonSchemaExporter`, which arrived in .NET 9. Running everything in Docker means no .NET SDK has to be installed to try it.
+- **Gemini is the AI,** as the brief suggests, using the model set in `Gemini:Model` in `appsettings.json` (`gemini-3.5-flash-lite`). Changing the model needs no code change.
+- **Up to ten results instead of five.** The brief's tier E says "return up to 5 ordered candidates". Ten gives the reader more to choose from when the search is vague; the limit is one constant, `MaxResults` in `BookSearchService`.
+- **The first reading is the most likely one.** Gemini is told to put the complete reading first, with every title, author and keyword it found, and every book is ranked against that reading. The other readings only widen the Open Library search.
+- **Nothing is added that the search didn't give.** Gemini may correct spelling and complete a title or name the search names (`hobbit` becomes *The Hobbit*), but not add an author or title the reader didn't type. A search for `hobbit` is therefore ranked on the title alone.
+- **Open Library's data is used as it is.** Where its records are incomplete or inconsistent, such as missing roles or duplicate works, the app works around them with rules and doesn't try to correct the data.
+- **A refused search is the reader's to change.** When Open Library refuses every search made from the readings (for example `the`), its reason is passed on with a `422` rather than hidden behind an empty result.
+
 ## Design decisions
 
 ### Code is organized by feature, not by type
@@ -81,10 +151,11 @@ server/FindThatBook.Api/
 │   ├── Books/
 │   │   └── Search/
 │   │       ├── Controllers/
-│   │       ├── DTOs/         the response the API returns (BookSearchResponse)
-│   │       ├── Helpers/      small helpers used only by this feature (normalization, mapping)
-│   │       ├── Models/       the feature's other models
-│   │       └── Services/     business logic
+│   │       ├── DTOs/         the response the API returns
+│   │       ├── Candidates/   what flows between the pipeline stages
+│   │       ├── Text/         text helpers several stages use
+│   │       ├── Pipeline/     one folder per stage of the search
+│   │       └── Services/     BookSearchService: runs the stages in order
 │   └── Health/
 │       └── Controllers/
 ├── Integrations/             clients for external services, shared by features
@@ -105,16 +176,19 @@ server/FindThatBook.Api/
 ├── Features/Books/
 │   ├── BooksFeature.cs        registers the feature's services
 │   └── Search/
-│       ├── Controllers/
-│       ├── DTOs/              the response the API returns
-│       ├── Helpers/           normalization and mapping Open Library data to BookResult
-│       ├── Models/            BookResult and the models used inside search
-│       └── Services/          search logic, one class per step:
-│                              BookSearchService runs the steps in order,
-│                              IQueryReader / GeminiQueryReader reads the search into readings (prompt, schema),
-│                              ICandidateFinder / OpenLibraryCandidateFinder finds works for the readings,
-│                              PrimaryAuthorResolver, WorkConsolidator and CandidateRanker (pure rules),
-│                              ICandidateExplainer / GeminiCandidateExplainer writes the explanations
+│       ├── Controllers/       BookSearchController
+│       ├── DTOs/              BookSearchResponse, BookResult: the response the API returns
+│       ├── Candidates/        BookCandidate, CandidateAuthor, AuthorCredit: a work with its credited people
+│       ├── Text/              ToNormalized(), PersonNames
+│       ├── Pipeline/          the search's stages, in the order they run:
+│       │   ├── Reading/       IQueryReader, GeminiQueryReader, QueryReading(s): the search becomes readings
+│       │   ├── Finding/       ICandidateFinder, OpenLibraryCandidateFinder: readings become works
+│       │   ├── Authors/       PrimaryAuthorResolver: primary authors apart from contributors
+│       │   ├── Consolidation/ WorkConsolidator: duplicate works become one canonical work
+│       │   ├── Ranking/       CandidateRanker, CandidateMatch, TitleMatch, AuthorMatch: tiers A to E
+│       │   ├── Explanation/   ICandidateExplainer, GeminiCandidateExplainer, CandidateExplanation(s)
+│       │   └── Mapping/       BookResultMapper: candidates become the API response
+│       └── Services/          BookSearchService, IBookSearchService: run the stages in order
 └── Integrations/
     ├── OpenLibrary/
     │   ├── IOpenLibraryClient.cs, OpenLibraryClient.cs
@@ -130,8 +204,10 @@ Rules for this layout:
 
 - **Integrations stay general.** A client describes what its service can do (search, fetch a work, generate content), never what book search needs. The prompts we send Gemini and the JSON we ask it to return belong to the feature that uses them, which keeps each client reusable.
 - **Integrations never reference features.** They don't know about `BookResult`, tiers or each other. A feature injects the interface it needs. Because of this one-way rule, `Integrations/` could later move into its own class library without changes.
-- **Each `Models/` folder has one owner.** `Search/DTOs` and `Search/Models` hold the search feature's models. Some form the API response (`BookSearchResponse` in `DTOs/`, `BookResult` in `Models/`) and change only when we change the API. Others are used only inside the feature and never reach the client, such as `QueryReadings` and `QueryReading`, which hold the answer `BookSearchService` gets from Gemini. `OpenLibrary/Models` and `Gemini/Models` copy another service's JSON and change only when that service does.
-- **Each search step that calls an outside service sits behind an interface the feature owns.** `IQueryReader` (Gemini) and `ICandidateFinder` (Open Library) let `BookSearchService` run the steps without knowing how either service is called, and give tests a seam for a fake. The implementations live in the feature, not in `Integrations/`, because the prompt and the way readings become searches are decisions about book search. Steps that are pure logic, such as mapping, don't need an interface.
+- **The search is split into pipeline stages, one folder each.** Each folder under `Search/Pipeline/` holds everything its stage needs: its interface, its implementation and its own models. Working on ranking means opening `Pipeline/Ranking/` and nothing else. The folders follow the order the stages run in `BookSearchService.SearchAsync`, and a new stage, such as an author-works fallback, is a new folder that doesn't touch the others.
+- **A model lives with the code that uses it.** Models used by one stage sit in that stage's folder, for example `QueryReading` in `Pipeline/Reading/`. Models that flow between stages sit in `Search/Candidates/`, and the models the API returns sit in `Search/DTOs/`, so they change only when the API does. `OpenLibrary/Models` and `Gemini/Models` copy another service's JSON and change only when that service does.
+- **Namespaces follow the folders,** for example `FindThatBook.Api.Features.Books.Search.Pipeline.Ranking`.
+- **Each stage that calls an outside service sits behind an interface the feature owns.** `IQueryReader` and `ICandidateExplainer` (Gemini) and `ICandidateFinder` (Open Library) let `BookSearchService` run the stages without knowing how either service is called, and give tests a seam for a fake. The implementations live in the feature, not in `Integrations/`, because the prompts and the way readings become searches are decisions about book search. Stages that are pure logic, such as ranking and mapping, are static classes with no interface.
 - **External models stop at the feature.** `BookSearchService` maps Open Library and Gemini data into our own types. Controllers and API responses never expose them, so a change on Open Library's side doesn't change our API.
 - **The mapping step holds the real decisions.** Merging editions into works and separating primary authors from contributors happens while mapping Open Library data in the feature. Keeping that mapping in its own class makes it easy to find and to test with recorded Open Library JSON.
 - **External models are named after their source,** for example `WorkSearchDoc` (one of the `docs` in Open Library's search response) and `GenerateContentResponse` (Gemini's `generateContent` answer), so they aren't confused with our `BookResult`.
@@ -259,7 +335,7 @@ Why the tiers aren't decided by Gemini: an earlier version asked Gemini for the 
 
 ### Search text is normalized before it is read
 
-The brief asks for searches to be normalized (lowercase, punctuation, diacritics, partials) so that small differences don't stop a match. `ToNormalized()` in `Features/Books/Search/Helpers/StringExtensions.cs` does this, and `BookSearchService` runs it on the user's search, and on the title, author and keywords Gemini reads from it before they are sent to Open Library. When matching against Open Library is built, its titles and author names should go through the same method, so both sides of a comparison follow identical rules.
+The brief asks for searches to be normalized (lowercase, punctuation, diacritics, partials) so that small differences don't stop a match. `ToNormalized()` in `Features/Books/Search/Text/StringExtensions.cs` does this, and `BookSearchService` runs it on the user's search, and on the title, author and keywords Gemini reads from it before they are sent to Open Library. When matching against Open Library is built, its titles and author names should go through the same method, so both sides of a comparison follow identical rules.
 
 The rules are chosen for Open Library's search. Each one was checked against the live API, because its `title` and `author` fields are stricter than `q`: a form that `q` forgives can find nothing in a field.
 
@@ -306,7 +382,7 @@ Decisions behind these rules:
 - **Running it twice changes nothing.** The output of `ToNormalized()` is already in normal form, so text that has been cleaned once can safely be cleaned again.
 - **The response echoes what the user typed.** `query` in the response is the original search, not the normalized one, so the page can show it back as entered.
 - **It is named `ToNormalized()`, not `Normalize()`.** `string` already has an instance method `Normalize()`, and C# always prefers an instance method over an extension method with the same name, so an extension called `Normalize()` would never run.
-- **It lives in the feature's `Helpers/` folder,** not in `Common/`. These rules exist for matching book titles and author names. If another feature needs them later, the class can move to `Common/`.
+- **It lives in the feature's `Text/` folder,** not in `Common/`. These rules exist for matching book titles and author names. If another feature needs them later, the class can move to `Common/`.
 
 `StringExtensionsTests` covers each rule, the brief's own examples and the edge cases above.
 
@@ -316,21 +392,34 @@ Decisions behind these rules:
 - **When Gemini gives no readings,** the normalized search is sent to Open Library instead, so a Gemini problem doesn't mean no results.
 - **A refused reading is skipped while other readings got through,** so one refused reading doesn't lose the others. Only when every reading is refused does the user get a `422`.
 - **Up to ten results are returned.** The brief's tier E says "up to 5 ordered candidates"; `MaxResults` is 10 by choice.
+- **The order is decided on the server only.** `BookSearchService` returns the results best first: by tier, A to E, and within a tier in the order the readings found them. The client shows them exactly as given and never re-sorts, which its tests check. So the ranking rules live in one place, and a change to them never needs a client release.
 - **When Gemini can't explain a result** (its answer is blocked or isn't valid JSON), the result keeps its tier and gets a plain sentence built from Open Library's fields instead: *Open Library lists "The Hobbit" by J.R.R. Tolkien, first published in 1937.*
 
-## Nice to have
+## Future improvements
 
-Ideas that would help but aren't needed for the brief.
+What I would do with more time: first the known limitations, then the improvements.
 
-### Weighted readings decide how many results each reading gets
+### Known limitations
 
-Today every reading is treated the same: Open Library is searched for each one, and the five results are filled in reading order, so the most likely reading's works crowd out the rest whether Gemini was sure of it or not.
+- **With no author in the search, every work with that exact title is tier A.** For `hobbit`, Jude Fisher's and Patty Kempshall's *The Hobbit* rank A next to Tolkien's. Open Library's order keeps Tolkien's first, but the tier doesn't tell them apart.
+- **A subtitle can make a different book an exact match.** "The Hobbit: The Desolation of Smaug" has the main title "The Hobbit", so it counts as an exact title for `hobbit`.
+- **A search by subtitle alone isn't reliably found.** Open Library's work record for *The Hobbit* has no subtitle, so `title=there and back again` doesn't match it, and Gemini isn't allowed to name a title the search didn't give. A work that does record the subtitle is only a near match (tier C).
+- **Primary authors are only as good as Open Library's data.** Work records carry no roles, so a contributor is only recognized when a role is recorded or the original work is among the results. Otherwise everyone listed stays a listed author, and nobody is guessed.
+- **The page shows a general error for a `422`.** The client shows the validation message for a `400` and a "search unavailable" message for a `502`, but doesn't yet show Open Library's reason for a refused search.
+- **The optional AI re-ranking (2c) isn't built.** The order comes from the tiers and Open Library's relevance.
+- **Gemini is called twice per search,** once to read it and once to explain the results. That adds latency, and an outage of either call fails the search with a `502`.
 
-If each reading carried a weight, a confidence between 0 and 1 that it is what the user meant, the five result slots could be shared out in proportion to those weights:
+### Improvements
+
+#### Weighted readings decide how many results each reading gets
+
+Today every reading is treated the same: Open Library is searched for each one, and within a tier the results follow reading order, so the most likely reading's works crowd out the rest whether Gemini was sure of it or not.
+
+If each reading carried a weight, a confidence between 0 and 1 that it is what the user meant, the ten result slots could be shared out in proportion to those weights:
 
 | Gemini's readings | Weights | Results |
 |---|---|---|
-| One clear reading | 0.9, 0.1 | 4–5 books from the first reading, at most 1 from the second |
+| One clear reading | 0.9, 0.1 | 9 books from the first reading, 1 from the second |
 | Two equally likely readings | 0.5, 0.5 | Books from both, split evenly |
 | Nothing stands out | 0.4, 0.3, 0.3 | A spread across all three readings |
 
@@ -340,10 +429,10 @@ This would mean:
 
 - **Asking Gemini for a weight** on each reading, by adding a `weight` property to `QueryReading`, so the generated schema asks for it too.
 - **Making the weights add up to 1** before using them, since Gemini's numbers won't always.
-- **Rounding to whole slots** so the five slots are always filled, and handing a reading's unused slots to the next one when its search finds fewer works.
+- **Rounding to whole slots** so every slot is filled, and handing a reading's unused slots to the next one when its search finds fewer works.
 - **Not trusting the numbers too much.** Gemini's confidence is a rough signal, not a measured probability, so it should be checked against real searches before it changes the results much.
 
-### A request ID on every log line and response
+#### A request ID on every log line and response
 
 One search writes log lines from HTTP logging, Gemini, Open Library and, on failure, the exception handler, and nothing in the console output ties them together. Two steps, each useful on its own:
 
@@ -357,7 +446,7 @@ Details for the middleware:
 - **A caller's ID is used only when it is short and plain** (letters, digits and `._:-`, up to 64 characters). Anything else is replaced, so a crafted header can't write fake lines or control characters into the logs.
 - **Its scope should be named `CorrelationId`,** not `RequestId`, because ASP.NET Core's built-in scope already uses `RequestId` and every line would show two different IDs under the same name.
 
-### Searches in more languages
+#### Searches in more languages
 
 Search is built for languages written in the Latin alphabet, the ones whose letters can be reduced to plain English letters. `ToNormalized()` folds `Brontë` to `bronte` and `Søren` to `soren`, so a search typed without accents still matches. Other scripts get much less help:
 
@@ -367,7 +456,7 @@ Search is built for languages written in the Latin alphabet, the ones whose lett
 
 Supporting more languages would mean transliterating each script into Latin letters (for example with ICU's transliterator), splitting words in scripts that don't use spaces, matching against a work's titles in other languages as well as its main title, and passing the user's language to Open Library through `WorkSearchRequest.Language`.
 
-### A token limit on Gemini calls
+#### A token limit on Gemini calls
 
 Nothing limits how many tokens Gemini may spend on an answer. The reading prompt asks for a few short readings, so answers are small today, but an answer that runs long costs more, takes longer and uses up the free tier's quota sooner. `GeminiClient` already logs the tokens each call used.
 
@@ -376,7 +465,7 @@ Nothing limits how many tokens Gemini may spend on an answer. The reading prompt
 - **The input is already bounded.** The controller rejects searches over 200 characters, so the prompt can't grow with what the user types.
 - **A budget over time** (tokens per minute or per day) would go further, refusing or queueing calls once the budget is spent. That matters only when many people use the site.
 
-### One place to configure the search limits
+#### One place to configure the search limits
 
 The three numbers that shape every search are constants in `BookSearchService`:
 

@@ -1,3 +1,6 @@
+using FindThatBook.Api.Features.Books.Search.Pipeline.Explanation;
+using FindThatBook.Api.Features.Books.Search.Pipeline.Finding;
+using FindThatBook.Api.Features.Books.Search.Pipeline.Reading;
 using FindThatBook.Api.Features.Books.Search.Services;
 
 namespace FindThatBook.Api.Features.Books;

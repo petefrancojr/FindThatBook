@@ -1,6 +1,12 @@
 using FindThatBook.Api.Features.Books.Search.DTOs;
-using FindThatBook.Api.Features.Books.Search.Helpers;
-using FindThatBook.Api.Features.Books.Search.Models;
+using FindThatBook.Api.Features.Books.Search.Pipeline.Authors;
+using FindThatBook.Api.Features.Books.Search.Pipeline.Consolidation;
+using FindThatBook.Api.Features.Books.Search.Pipeline.Explanation;
+using FindThatBook.Api.Features.Books.Search.Pipeline.Finding;
+using FindThatBook.Api.Features.Books.Search.Pipeline.Mapping;
+using FindThatBook.Api.Features.Books.Search.Pipeline.Ranking;
+using FindThatBook.Api.Features.Books.Search.Pipeline.Reading;
+using FindThatBook.Api.Features.Books.Search.Text;
 
 namespace FindThatBook.Api.Features.Books.Search.Services;
 
@@ -33,14 +39,14 @@ public class BookSearchService(IQueryReader queryReader, ICandidateFinder candid
 
         var candidates = PrimaryAuthorResolver.Resolve(openLibraryResponse);
 
-        foreach (var candidate in candidates.Where(candidate => candidate.Authors.Count > 1))
-        {
-            logger.LogDebug(
-                "Authors of {WorkId} \"{Title}\": {Authors}",
-                candidate.Work.WorkId,
-                candidate.Work.Title,
-                string.Join("; ", candidate.Authors.Select(author => $"{author.Name} = {author.Credit} ({author.Reason})")));
-        }
+        // foreach (var candidate in candidates.Where(candidate => candidate.Authors.Count > 1))
+        // {
+        //     logger.LogDebug(
+        //         "Authors of {WorkId} \"{Title}\": {Authors}",
+        //         candidate.Work.WorkId,
+        //         candidate.Work.Title,
+        //         string.Join("; ", candidate.Authors.Select(author => $"{author.Name} = {author.Credit} ({author.Reason})")));
+        // }
 
         var canonicalWorks = WorkConsolidator.Consolidate(candidates);
 
