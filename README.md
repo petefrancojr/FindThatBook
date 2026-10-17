@@ -109,7 +109,10 @@ server/FindThatBook.Api/
 │       ├── DTOs/              the response the API returns
 │       ├── Helpers/           normalization and mapping Open Library data to BookResult
 │       ├── Models/            BookResult and the models used inside search
-│       └── Services/          search logic: prompts, consolidation, ranking
+│       └── Services/          search logic, one class per step:
+│                              BookSearchService runs the steps in order,
+│                              IQueryReader / GeminiQueryReader reads the search into readings (prompt, schema),
+│                              ICandidateFinder / OpenLibraryCandidateFinder finds works for the readings
 └── Integrations/
     ├── OpenLibrary/
     │   ├── IOpenLibraryClient.cs, OpenLibraryClient.cs
@@ -126,6 +129,7 @@ Rules for this layout:
 - **Integrations stay general.** A client describes what its service can do (search, fetch a work, generate content), never what book search needs. The prompts we send Gemini and the JSON we ask it to return belong to the feature that uses them, which keeps each client reusable.
 - **Integrations never reference features.** They don't know about `BookResult`, tiers or each other. A feature injects the interface it needs. Because of this one-way rule, `Integrations/` could later move into its own class library without changes.
 - **Each `Models/` folder has one owner.** `Search/DTOs` and `Search/Models` hold the search feature's models. Some form the API response (`BookSearchResponse` in `DTOs/`, `BookResult` in `Models/`) and change only when we change the API. Others are used only inside the feature and never reach the client, such as `QueryReadings` and `QueryReading`, which hold the answer `BookSearchService` gets from Gemini. `OpenLibrary/Models` and `Gemini/Models` copy another service's JSON and change only when that service does.
+- **Each search step that calls an outside service sits behind an interface the feature owns.** `IQueryReader` (Gemini) and `ICandidateFinder` (Open Library) let `BookSearchService` run the steps without knowing how either service is called, and give tests a seam for a fake. The implementations live in the feature, not in `Integrations/`, because the prompt and the way readings become searches are decisions about book search. Steps that are pure logic, such as mapping, don't need an interface.
 - **External models stop at the feature.** `BookSearchService` maps Open Library and Gemini data into our own types. Controllers and API responses never expose them, so a change on Open Library's side doesn't change our API.
 - **The mapping step holds the real decisions.** Merging editions into works and separating primary authors from contributors happens while mapping Open Library data in the feature. Keeping that mapping in its own class makes it easy to find and to test with recorded Open Library JSON.
 - **External models are named after their source,** for example `WorkSearchDoc` (one of the `docs` in Open Library's search response) and `GenerateContentResponse` (Gemini's `generateContent` answer), so they aren't confused with our `BookResult`.

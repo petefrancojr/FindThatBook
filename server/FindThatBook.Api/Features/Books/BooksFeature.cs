@@ -8,6 +8,8 @@ public static class BooksFeature
     public static IServiceCollection AddBooksFeature(this IServiceCollection services)
     {
         services.AddScoped<IBookSearchService, BookSearchService>();
+        services.AddScoped<IQueryReader, GeminiQueryReader>();
+        services.AddScoped<ICandidateFinder, OpenLibraryCandidateFinder>();
 
         return services;
     }
