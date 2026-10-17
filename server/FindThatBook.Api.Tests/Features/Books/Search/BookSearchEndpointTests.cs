@@ -1,14 +1,24 @@
 using System.Net;
 using System.Text.Json;
+using FindThatBook.Api.Integrations.Gemini;
+using FindThatBook.Api.Tests.TestSupport;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace FindThatBook.Api.Tests.Features.Books.Search;
 
-/// <summary>Runs requests through the real ASP.NET pipeline: routing, validation and JSON output.</summary>
+/// <summary>
+/// Runs requests through the real ASP.NET pipeline: routing, validation and JSON output.
+/// Gemini is replaced with a fake so these tests never call the network.
+/// </summary>
 public class BookSearchEndpointTests(WebApplicationFactory<Program> factory)
     : IClassFixture<WebApplicationFactory<Program>>
 {
-    private readonly HttpClient _client = factory.CreateClient();
+    private readonly HttpClient _client = factory
+        .WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+            services.AddSingleton<IGeminiClient>(FakeGeminiClient.Answering("""{ "readings": [] }"""))))
+        .CreateClient();
 
     [Fact]
     public async Task Search_WithValidQuery_Returns200()

@@ -81,6 +81,7 @@ server/FindThatBook.Api/
 │   ├── Books/
 │   │   └── Search/
 │   │       ├── Controllers/
+│   │       ├── Helpers/      small extensions used only by this feature
 │   │       ├── Models/
 │   │       └── Services/     business logic
 │   └── Health/
@@ -132,3 +133,36 @@ When Gemini (or, later, Open Library) can't give an answer, its client throws an
 An answer that arrives but isn't usable, such as a blocked prompt or empty text, is not an error at the client level. The Gemini client returns it with `Text` set to null, and the feature that asked decides what to do, for example falling back to a template explanation.
 
 The Gemini API key is sent in the `x-goog-api-key` header rather than the URL, so it never appears in request logs.
+
+### Search text is normalized before it is read
+
+The brief asks for searches to be normalized (lowercase, punctuation, diacritics, partials) so that small differences don't stop a match. `ToNormalized()` in `Features/Books/Search/Helpers/StringExtensions.cs` does this, and `BookSearchService` runs it on the query before sending it to Gemini. When matching against Open Library is built, its titles and author names should go through the same method, so both sides of a comparison follow identical rules.
+
+It applies these rules in order:
+
+| Rule | Example |
+|---|---|
+| Compatibility characters become plain ones | `ＴＯＬＫＩＥＮ` → `tolkien`, `ﬁnding` → `finding`, `Henry Ⅷ` → `henry viii` |
+| Accents are removed from Latin letters | `Brontë` → `bronte`, `García Márquez` → `garcia marquez` |
+| Latin letters with no accent to strip are spelled plainly | `Søren` → `soren`, `Straße` → `strasse`, `Łódź` → `lodz` |
+| Everything is lowercased | `The Hobbit` → `the hobbit` |
+| Full stops and apostrophes are dropped without a space | `J.R.R.` → `jrr`, `O'Brien` → `obrien`, `Philosopher’s` → `philosophers` |
+| `&` becomes "and" | `Pride & Prejudice` → `pride and prejudice` |
+| Other punctuation, symbols and emoji become spaces | `spider-man` → `spider man`, `Dune: Messiah` → `dune messiah` |
+| Invisible characters are removed | zero-width spaces, soft hyphens, byte-order marks |
+| All whitespace collapses to single spaces | tabs, new lines and non-breaking spaces |
+| Spaced initials are joined | `J. R. R. Tolkien` → `jrr tolkien`, so it matches `JRR Tolkien` |
+
+Decisions behind these rules:
+
+- **Accents are stripped only from Latin letters.** In other scripts a mark can turn one letter into another: Russian `й` is a different letter from `и`, so `Война` must not become `воина`. Cyrillic, Greek, Devanagari and other scripts keep their marks and are only lowercased.
+- **Full stops join letters instead of splitting them.** This is what makes `J.R.R. Tolkien` equal `JRR Tolkien`. The cost is that a decimal such as `2.0` becomes `20`, which is rare in a book search.
+- **Some apostrophes count as letters in Unicode** (`ʼ`, U+02BC). The apostrophe rule runs before the letter check so they're dropped like the others.
+- **Small words are kept.** The brief's "partials" example (`tale two cities` should match `A Tale of Two Cities`) is about comparing two texts, not cleaning one. Dropping words like "a" and "of" here would empty titles made entirely of them, such as *It*. Ignoring them is left to the matching step.
+- **A search can normalize to nothing.** `!!!` passes the controller's validation, because it isn't blank, but normalizes to an empty string.
+- **Running it twice changes nothing.** The output of `ToNormalized()` is already in normal form, so text that has been cleaned once can safely be cleaned again.
+- **The response echoes what the user typed.** `query` in the response is the original search, not the normalized one, so the page can show it back as entered.
+- **It is named `ToNormalized()`, not `Normalize()`.** `string` already has an instance method `Normalize()`, and C# always prefers an instance method over an extension method with the same name, so an extension called `Normalize()` would never run.
+- **It lives in the feature's `Helpers/` folder,** not in `Common/`. These rules exist for matching book titles and author names. If another feature needs them later, the class can move to `Common/`.
+
+`StringExtensionsTests` covers each rule, the brief's own examples and the edge cases above.

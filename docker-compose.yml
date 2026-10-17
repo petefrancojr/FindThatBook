@@ -3,6 +3,8 @@ services:
     build: ./server
     environment:
       ASPNETCORE_ENVIRONMENT: Development
+      # Read from .env at the repo root (see .env.example). Empty if not set.
+      Gemini__ApiKey: ${GEMINI_API_KEY:-}
     ports:
       - "5080:8080"
 
@@ -31,6 +33,10 @@ services:
     image: mcr.microsoft.com/dotnet/sdk:10.0
     profiles: ["test"]
     working_dir: /src
+    environment:
+      # Live tests call the real Gemini API. They are skipped unless LIVE_TESTS=true.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      LIVE_TESTS: ${LIVE_TESTS:-false}
     volumes:
       - ./server:/src
       - nuget-cache:/root/.nuget/packages
