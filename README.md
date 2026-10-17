@@ -87,7 +87,7 @@ server/FindThatBook.Api/
 │   └── Health/
 │       └── Controllers/
 ├── Integrations/             clients for external services, shared by features
-└── Common/                   cross-cutting setup (OpenAPI)
+└── Common/                   cross-cutting setup (OpenAPI, error handling)
 ```
 
 Everything related to one feature sits in one place. Changing how book search works means opening one folder, not hunting through several. A new feature is added as a new folder next to the existing ones and doesn't touch them.
@@ -96,7 +96,7 @@ The top-level folder is named `Features` rather than `Domains`. In clean archite
 
 ### API response models are kept apart from external data
 
-The Open Library and Gemini clients live in a top-level `Integrations/` folder, next to `Features/`. Other features are likely to need them later, so they sit where any feature can find and reuse them. Each one owns its client, behind an interface, and a `Models/` folder that mirrors that service's JSON. Gemini is built; Open Library is next:
+The Open Library and Gemini clients live in a top-level `Integrations/` folder, next to `Features/`. Other features are likely to need them later, so they sit where any feature can find and reuse them. Each one owns its client, behind an interface, and a `Models/` folder that mirrors that service's JSON:
 
 ```
 server/FindThatBook.Api/
@@ -110,7 +110,7 @@ server/FindThatBook.Api/
     ├── OpenLibrary/
     │   ├── IOpenLibraryClient.cs, OpenLibraryClient.cs
     │   ├── OpenLibraryRegistration.cs   AddOpenLibrary()
-    │   └── Models/            Open Library's JSON, field for field
+    │   └── Models/            Open Library's search request and JSON (search, works, authors), field for field
     └── Gemini/
         ├── IGeminiClient.cs, GeminiClient.cs
         ├── GeminiRegistration.cs        AddGemini()
@@ -124,15 +124,39 @@ Rules for this layout:
 - **Each `Models/` folder has one owner.** `Search/Models` holds all of the search feature's models. Some form the API response (`BookSearchResponse`, `BookResult`) and change only when we change the API. Others are used only inside the feature and never reach the client, such as `QueryReadings` and `QueryReading`, which hold the answer `BookSearchService` gets from Gemini. `OpenLibrary/Models` and `Gemini/Models` copy another service's JSON and change only when that service does.
 - **External models stop at the feature.** `BookSearchService` maps Open Library and Gemini data into our own types. Controllers and API responses never expose them, so a change on Open Library's side doesn't change our API.
 - **The mapping step holds the real decisions.** Merging editions into works and separating primary authors from contributors happens while mapping Open Library data in the feature. Keeping that mapping in its own class makes it easy to find and to test with recorded Open Library JSON.
-- **External models are named after their source,** for example `WorkRecord` and `AuthorRecord`, so they aren't confused with our `BookResult`.
+- **External models are named after their source,** for example `WorkSearchDoc` (one of the `docs` in Open Library's search response) and `GenerateContentResponse` (Gemini's `generateContent` answer), so they aren't confused with our `BookResult`.
 
 ### An unavailable external service is a 502
 
-When Gemini (or, later, Open Library) can't give an answer, its client throws an exception derived from `ExternalServiceUnavailableException` in `Common/Errors`. That covers a network failure, a timeout, a rejected API key, rate limiting or a server error. `ExternalServiceExceptionHandler` turns it into a `502` ProblemDetails response that names the service ("Gemini is unavailable right now. Try again in a moment."). The underlying reason is logged but never sent to the client.
+When Gemini or Open Library can't give an answer, its client throws an exception derived from `ExternalServiceUnavailableException` in `Common/Errors`. That covers a network failure, a timeout, a rejected API key, rate limiting or a server error. `ExternalServiceExceptionHandler` turns it into a `502` ProblemDetails response that names the service ("Gemini is unavailable right now. Try again in a moment."). The underlying reason is logged but never sent to the client.
 
 An answer that arrives but isn't usable, such as a blocked prompt or empty text, is not an error at the client level. The Gemini client returns it with `Text` set to null, and the feature that asked decides what to do, for example falling back to a template explanation.
 
 The Gemini API key is sent in the `x-goog-api-key` header rather than the URL, so it never appears in request logs.
+
+### The Open Library client returns Open Library's data as it is
+
+Like the Gemini client, `IOpenLibraryClient` knows nothing about book search. Matching, merging editions and ranking belong to the feature that calls it. It covers the four endpoints the brief names:
+
+| Method | Endpoint | Returns |
+|---|---|---|
+| `SearchWorksAsync(WorkSearchRequest)` | [`/search.json`](https://openlibrary.org/dev/docs/api/search) | `WorkSearchResponse`: query, title, author, subject, fields, sort, language and paging |
+| `GetWorkAsync(workId)` | `/works/{id}.json` | `WorkRecord`, or null if there is no such work |
+| `GetAuthorAsync(authorId)` | `/authors/{id}.json` | `AuthorRecord`, or null if there is no such author |
+| `GetAuthorWorksAsync(authorId, limit, offset)` | `/authors/{id}/works.json` | `AuthorWorksResponse`, one page of works, or null if there is no such author |
+
+- **It asks only for the fields it reads.** Without a `fields` parameter Open Library returns every field, including edition and ISBN lists hundreds of entries long. `WorkSearchRequest.DefaultFields` lists the fields `WorkSearchDoc` maps. A caller can pass its own list, for example adding `editions` to get each work's best-matching edition.
+- **Field names are mapped one by one.** Open Library mixes `snake_case` (`author_name`, `first_publish_year`) with `camelCase` (`numFound`), so every model property has a `[JsonPropertyName]` instead of relying on a naming policy.
+- **Every result field is optional.** Open Library leaves out what a work doesn't have, so strings and numbers are nullable and lists default to empty.
+- **IDs come with and without their path.** `key` arrives as `/works/OL27482W`, and every model has a `WorkId`, `AuthorId` or `EditionId` that gives the bare `OL27482W`. The methods that take an ID accept either form.
+- **IDs are checked before they reach a URL.** `GetWorkAsync` only accepts `OL…W` and the author methods only `OL…A`, so a value from a search result or a user can never change the path being requested. Anything else throws `ArgumentException`, because it is a bug in the caller, not an outage.
+- **`author_name` in search results is not the author list.** It holds every name credited on any edition, including illustrators and translators. `WorkRecord.Authors` is the work's own list, and each `WorkAuthorRole` has a `Role` (such as "Translator") only when the person is a contributor rather than a primary author.
+- **Some text fields have two shapes.** `description`, `bio` and `first_sentence` come either as a plain string or as `{ "type": "/type/text", "value": "..." }`, even between two records of the same type (Tolkien's bio is a string, Austen's is an object). `TextValueJsonConverter` reads both into a string. As a precaution, `KeyReference` (such as a work's link to an author) also accepts a bare path string in place of `{ "key": "..." }`, so one oddly shaped record can't fail a whole response.
+- **Image lists can hold `-1`.** `covers` and `photos` use `-1` to mean "no image", so a caller must skip it before building an image URL.
+- **An author's works are not ranked.** `/authors/{id}/works.json` returns works in no useful order (Tolkien's first page is colouring books). For the brief's "top works by that author" fallback, search by author instead, where Open Library ranks by relevance.
+- **"Not found" is not an outage.** A missing work or author returns null, so the caller can fall back. A 404 from search does mean an outage, because a search with no matches returns an empty `Docs` list rather than a 404. Open Library also answers 200 to a query Solr can't parse, so there is no "bad query" status to handle.
+- **It identifies itself.** Open Library asks applications to send a `User-Agent` with their name and, for regular use, a contact address. It is set in `OpenLibrary:UserAgent`.
+- **Outages are a 502,** the same as Gemini: an unreachable host, a timeout, an error status or a body that isn't JSON throws `OpenLibraryUnavailableException`.
 
 ### Search text is normalized before it is read
 

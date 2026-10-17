@@ -48,17 +48,28 @@ public class BookSearchService(IGeminiClient gemini, ILogger<BookSearchService> 
 
     public async Task<BookSearchResponse> SearchAsync(string query, CancellationToken cancellationToken = default)
     {
-        var normalizedQuery = query.ToNormalized();
-
-        var readings = await GetReadingsFromGeminiAsync(normalizedQuery, cancellationToken);
+        var readings = await GetReadingsFromGeminiAsync(query, cancellationToken);
 
         foreach(var reading in readings)
         {
             logger.LogInformation("\n\n===========\nTitle:{title}\nAuthor:{author}\nKeyWords: [{keywords}]\n===========\n\n", reading.Title, reading.Author, string.Join(",\n", reading.Keywords));
         }
 
-        // Returns placeholder results until Open Library is wired in and the readings are used.
-        return DummyBookData.Search(query);
+        var normalizedQuery = query.ToNormalized();
+
+        var openLibraryResponse = await GetBooksFromOpenLibraryAsync(normalizedQuery, cancellationToken);
+
+        // Consolidate works into canonicle works openLibraryResponse 
+
+        // Resolve primary authors from 'works.authors'
+
+        // Rank & Explain openLibraryResponse 
+
+        var result = DummyBookData.Search(normalizedQuery);
+
+        // Swap DummyBookData.Search with the actual results
+
+        return result;
     }
 
     /// <summary>Sends the query-reading prompt to Gemini, logs its answer and turns the JSON into readings.</summary>

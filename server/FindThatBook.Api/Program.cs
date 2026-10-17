@@ -2,6 +2,7 @@ using FindThatBook.Api.Common.Errors;
 using FindThatBook.Api.Common.OpenApi;
 using FindThatBook.Api.Features.Books;
 using FindThatBook.Api.Integrations.Gemini;
+using FindThatBook.Api.Integrations.OpenLibrary;
 using Microsoft.AspNetCore.HttpLogging;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -10,6 +11,7 @@ builder.Services.AddControllers();
 builder.Services.AddApiDocumentation();
 builder.Services.AddErrorHandling();
 builder.Services.AddGemini(builder.Configuration);
+builder.Services.AddOpenLibrary(builder.Configuration);
 builder.Services.AddBooksFeature();
 builder.Services.AddHttpLogging(options =>
 {
