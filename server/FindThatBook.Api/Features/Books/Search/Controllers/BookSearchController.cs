@@ -16,6 +16,7 @@ public class BookSearchController(IBookSearchService bookSearchService) : Contro
     [HttpGet("search", Name = "SearchBooks")]
     [ProducesResponseType<BookSearchResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status502BadGateway)]
     public async Task<ActionResult<BookSearchResponse>> Search(
         [FromQuery,

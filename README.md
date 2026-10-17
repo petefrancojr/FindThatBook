@@ -64,10 +64,10 @@ The generated client uses `http://api:8080/` as its default root URL because tha
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/books/search?q={text}` | Searches for books. Returns `400` if `q` is missing, blank, or over 200 characters, and `502` if Open Library or Gemini is unavailable. |
+| `GET /api/books/search?q={text}` | Searches for books. Returns `400` if `q` is missing, blank, or over 200 characters, `422` with Open Library's reason if Open Library refuses every search made from it, and `502` if Open Library or Gemini is unavailable. A search with no letters or digits, such as `!!!`, returns `200` with no books. |
 | `GET /api/health` | Reports that the API is running. |
 
-Search returns real Open Library results: Gemini reads the search into up to three readings, Open Library is searched once per reading, and the first five distinct works are returned. Ranking and Gemini-written explanations aren't built yet, so every result has tier `E` ("no clear winner") and a plain explanation built from Open Library's fields.
+Search returns real Open Library results: Gemini reads the search into several readings, Open Library is searched once per reading, and the first ten distinct works are returned. Ranking and Gemini-written explanations aren't built yet, so every result has tier `E` ("no clear winner") and a plain explanation built from Open Library's fields.
 
 ## Design decisions
 
@@ -160,29 +160,35 @@ Like the Gemini client, `IOpenLibraryClient` knows nothing about book search. Ma
 - **Image lists can hold `-1`.** `covers` and `photos` use `-1` to mean "no image", so a caller must skip it before building an image URL.
 - **An author's works are not ranked.** `/authors/{id}/works.json` returns works in no useful order (Tolkien's first page is colouring books). For the brief's "top works by that author" fallback, search by author instead, where Open Library ranks by relevance.
 - **"Not found" is not an outage.** A missing work or author returns null, so the caller can fall back. A 404 from search does mean an outage, because a search with no matches returns an empty `Docs` list rather than a 404.
-- **A refused query is not an outage either.** Open Library answers `422` to queries it won't run: a blocked word on its own (`the`) or anything under 3 characters (`of`, `a`, `*`). The client throws `OpenLibraryQueryRejectedException` with Open Library's reasons, not `OpenLibraryUnavailableException`, because retrying won't help and the service is up. The caller should treat it as a query with no matches. Other malformed queries still get a `200` with no results, and a few (a bare `AND`, an unknown `sort`) get a `500`, which can't be told apart from a real outage and stays a 502.
+- **A refused query is not an outage either.** Open Library answers `422` to queries it won't run: a blocked word on its own (`the`) or anything under 3 characters (`of`, `a`, `*`). The client throws `OpenLibraryQueryRejectedException` with Open Library's reasons, not `OpenLibraryUnavailableException`, because retrying won't help and the service is up. The caller decides what a refusal means for it. Other malformed queries still get a `200` with no results, and a few (a bare `AND`, an unknown `sort`) get a `500`, which can't be told apart from a real outage and stays a 502.
 - **It identifies itself.** Open Library asks applications to send a `User-Agent` with their name and, for regular use, a contact address. It is set in `OpenLibrary:UserAgent`.
 - **Outages are a 502,** the same as Gemini: an unreachable host, a timeout, an error status other than `404` or `422`, or a body that isn't JSON throws `OpenLibraryUnavailableException`.
 
-### A refused Open Library query is handled by the feature, not the error middleware
+### A search Open Library refuses is passed on to the client as a 422
 
-When Open Library refuses a query (a `422`, for `the` or anything under 3 characters), `OpenLibraryClient` throws `OpenLibraryQueryRejectedException`. `BookSearchService` catches it where it calls the search, logs Open Library's reason, and carries on as if the search found no works. The user gets a normal `200` with fewer or no results.
+When Open Library refuses a query (a `422`, for `the` or anything under 3 characters), `OpenLibraryClient` throws `OpenLibraryQueryRejectedException` with Open Library's reasons. One user search becomes several Open Library searches, one per reading, so `BookSearchService` decides per search:
+
+- **Some readings refused:** the refused ones are logged and skipped, and the user gets the books the others found.
+- **Every reading refused:** `BookSearchService` throws one `OpenLibraryQueryRejectedException` holding all of Open Library's reasons. `QueryRejectedExceptionHandler` in `Middleware/` turns it into a `422` ProblemDetails whose `detail` is Open Library's reason, for example "Query too short, must be at least 3 characters."
+
+A search with no letters or digits at all, such as `!!!`, never reaches Open Library. It returns a `200` with no books.
 
 Design considerations:
 
 - **It isn't an outage.** Open Library answered and is working, and the same query will be refused every time. A `502` saying "Open Library is unavailable, try again" would be wrong, and trying again wouldn't help. That's why the exception doesn't derive from `ExternalServiceUnavailableException`.
-- **For a book search, a refused query means "nothing found".** The user typed something; it just can't be searched as it is. That is the same answer a search with no matches gives, so it's handled the same way.
-- **The client stays general.** "Refused means no matches" is a decision about book search. Another feature could reasonably decide differently, for example by showing the user Open Library's reason, so the client reports the refusal and leaves the decision to the caller.
-- **A missed catch should be visible.** Nothing in `ExternalServiceExceptionHandler` handles this exception, so if a future caller forgets to catch it, the request fails with a `500`. That points straight at the missing catch, rather than hiding it.
+- **The reason helps the user.** "Query too short" or "the following queries are not allowed: the" says what to change, so it's passed on rather than hidden behind an empty result.
+- **`422` mirrors Open Library.** The request was well formed, and our own validation passed, but the search terms can't be run. That's what `422 Unprocessable Entity` means, and it keeps the response apart from the controller's `400` for a missing or too-long `q`.
+- **One refused reading shouldn't hide the books others found.** Gemini can produce a reading that is only a short keyword such as `of`. Failing the whole search because of it would throw away good results.
+- **The client stays general.** What a refusal means is the caller's decision, so the client only reports it.
 
 Alternatives considered:
 
-| Alternative | What it would do | Why not now |
+| Alternative | What it would do | Why not |
 |---|---|---|
-| Map it in the exception middleware as a safety net | A forgotten catch anywhere gives an empty `200` (or a `400`) instead of a `500` | Middleware can't build a proper empty result for each feature, and it would hide the missed catch. Worth adding if more features start calling Open Library search. |
-| Map it to a `400 Bad Request` | Tell the user their search can't be run | Users don't control how their words are turned into an Open Library query, so it isn't their error. |
+| Treat a refusal as no matches | A `200` with no books | The user wouldn't learn why nothing came back, or what to change. |
+| Map it to a `400 Bad Request` | The same status as the controller's validation | It would mix our own validation with Open Library's rules, and the client couldn't tell them apart. |
+| Fail when any reading is refused | A `422` even if other readings found books | It throws away good results because of one weak reading. |
 | Treat it as an outage (`502`) | Reuse the existing handler | It tells the user to retry something that will fail again, and it would count against Open Library in the logs. |
-| Return an empty list from the client | No exception at all | Every caller would lose the reason, and couldn't tell "refused" apart from "no matches". |
 | Check the query before calling Open Library | Avoid the request entirely | Open Library's rules (which words are blocked, the minimum length) are its own and can change. Copying them would drift. |
 
 ### Search text is normalized before it is read
@@ -247,13 +253,13 @@ Search works from end to end, but some steps the brief asks for aren't built yet
 | **Every result has tier `E`.** `BookResultMapper.UnrankedTier` | `tier` is required on every result, and `E` is the brief's "no clear winner" level, the only honest level before anything is ranked. | Ranking with the brief's hierarchy (exact title and primary author first, author-only fallback last), which gives each result its real tier. |
 | **Explanations are built from Open Library's fields:** *Open Library lists "The Hobbit" by J.R.R. Tolkien, first published in 1937.* | `explanation` is required, and the brief wants it grounded in fetched data. This sentence only uses fields Open Library returned. | Gemini writing each explanation from the fetched fields. The template sentence should stay as the fallback when Gemini is unavailable or gives no answer. |
 | **The author is the first name in `author_name`.** | It is usually the real author, but `author_name` also lists illustrators, adapters and translators. For the Dixon graphic novel of *The Hobbit*, the result currently shows "Charles Dixon". | Resolving primary authors from the work record's `authors` list (`GetWorkAsync`, after checking `IsWork`), so contributors are kept apart. |
-| **Results are the first five distinct works, in reading order.** | Works are de-duplicated by key only, and the most likely reading's works come first. Different works for the same book (for example two *Pride and Prejudice* records) both appear. | Consolidating works into canonical works, then ranking. |
+| **Results are the first ten distinct works, in reading order.** | Works are de-duplicated by key only, and the most likely reading's works come first. Different works for the same book (for example two *Pride and Prejudice* records) both appear. | Consolidating works into canonical works, then ranking. |
 
 These are settled and stay as they are:
 
-- **Each reading is searched in parallel,** asking for 10 works each, so ranking has more than five candidates to choose from.
+- **Each reading is searched in parallel,** asking for 10 works each.
 - **When Gemini gives no readings,** the normalized search is sent to Open Library instead, so a Gemini problem doesn't mean no results.
-- **A refused reading is handled per search,** so one refused reading doesn't lose the others.
+- **A refused reading is skipped while other readings got through,** so one refused reading doesn't lose the others. Only when every reading is refused does the user get a `422`.
 
 ## Nice to have
 
@@ -321,7 +327,7 @@ The three numbers that shape every search are constants in `BookSearchService`:
 |---|---|---|
 | `MaxReadings` | How many readings Gemini returns for one search | 8 |
 | `MaxWorksPerSearch` | How many works Open Library returns for each reading's search | 10 |
-| `MaxResults` | How many distinct books the client receives | 10 (the `.Take` that applies it is commented out) |
+| `MaxResults` | How many distinct books the client receives | 10 |
 
 Changing any of them means editing code and releasing. Moving them into one `BookSearchOptions` class, bound from a `BookSearch` section in `appsettings.json` the same way `GeminiOptions` and `OpenLibraryOptions` are, would put them in one place and let each environment set its own:
 
@@ -329,7 +335,7 @@ Changing any of them means editing code and releasing. Moving them into one `Boo
 "BookSearch": {
   "MaxReadings": 8,
   "MaxWorksPerSearch": 10,
-  "MaxResults": 5
+  "MaxResults": 10
 }
 ```
 
@@ -338,4 +344,4 @@ Things to handle when this is built:
 - **Check the values at startup** with `ValidateOnStart`, like the integrations do, so a zero or negative limit stops the app instead of quietly returning nothing.
 - **The prompt and the schema depend on `MaxReadings`.** The prompt says "Return {MaxReadings} readings", and the generated JSON schema sets `maxItems` from it. Both are built once into static fields today, so they would need to be built from the options instead.
 - **The numbers multiply.** A search makes up to `MaxReadings` Open Library calls of `MaxWorksPerSearch` works each, so 8 × 10 is up to 80 works fetched to return `MaxResults`. Raising either one raises Open Library's load and the time spent waiting on it.
-- **The brief asks for at most 5 results.** `MaxResults` should default to 5, with anything higher treated as a deliberate choice.
+- **The brief asks for at most 5 results.** `MaxResults` is 10 by choice, so the setting should say so where it is configured.

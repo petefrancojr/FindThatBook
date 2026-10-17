@@ -17,10 +17,10 @@ public class BookSearchService(IGeminiClient gemini, IOpenLibraryClient openLibr
 {
     private const int MaxReadings = 8;
 
-    /// <summary>The brief's limit: at most five results.</summary>
+    /// <summary>The most distinct books the client receives for one search.</summary>
     private const int MaxResults = 10;
 
-    /// <summary>How many works to ask Open Library for per reading. More than <see cref="MaxResults"/>, so ranking has candidates to choose from.</summary>
+    /// <summary>How many works to ask Open Library for per reading.</summary>
     private const int MaxWorksPerSearch = 10;
 
     private static readonly string ReadQueryInstruction = $"""
@@ -28,19 +28,24 @@ public class BookSearchService(IGeminiClient gemini, IOpenLibraryClient openLibr
         The text may hold a title, an author, a character's name, a year, special keywords, or a mix of these,
         often misspelled, abbreviated or in any order.
 
-        Return {MaxReadings} readings of the search, most likely first.
+        Return up to {MaxReadings} readings of the search, most likely first.
         - title: the book's full, correctly spelled title, only if the search points to one.
         - author: the author's full, correctly spelled name, only if the search points to one.
-        - keywords: every other useful word from the search, such as character names, places,
+        - keywords: the other useful words from the search, such as character names, places,
           subjects or a year, spelled correctly. If a word from the search refers to the author or the title,
           then it must be omitted from the keywords list.
-        Leave title or author out rather than guess. Never invent a book the search gives no clue to.
 
-        Make sure to include a reading with a title and an author, but no keywords.
-        Make sure to include a reading with a title and no keywords and no author.
-        Make sure to include a reading with a title and keywords, but no author.
-        Make sure to include a reading with an author and no keywords or title.
-        Make sure to include a reading with an author and keywords, but no title.
+        Only use words and terms the search provides. You may correct their spelling and complete a partial title
+        or name that is in the search ("hobbit" can become "The Hobbit"), but never add a title, author or keyword
+        that is not in the search. For example, the search "hobbit" has no author, so leave the author out.
+        Leave title or author out rather than guess.
+
+        Readings that split the search in different ways help find the book:
+        - If you can identify a title, include a reading with just the title.
+        - If you can identify an author, include a reading with just the author.
+        - If you can identify both, include a reading with just the title and the author.
+        - If you can identify a title and the search has keywords, include a reading with the title and the keywords.
+        - If you can identify an author and the search has keywords, include a reading with the author and the keywords.
         """;
 
     // Must stay above ReadingsSchema: static fields are set up in the order they're written.
@@ -64,16 +69,25 @@ public class BookSearchService(IGeminiClient gemini, IOpenLibraryClient openLibr
 
     public async Task<BookSearchResponse> SearchAsync(string query, CancellationToken cancellationToken = default)
     {
+        var normalizedQuery = query.ToNormalized();
+
+        // A search such as "!!!" passes validation but has no letters or digits, so there is nothing to look up.
+        if (normalizedQuery.Length == 0)
+        {
+            logger.LogInformation("Search {Query} is empty once normalized, so Gemini and Open Library are skipped.", query);
+            return new BookSearchResponse { Query = query, Results = [] };
+        }
+
         var normalizedReadings = await GetReadingsFromGeminiAsync(query, cancellationToken);
 
-        var openLibraryResponse = await GetBooksFromOpenLibraryAsync(normalizedReadings, query.ToNormalized(), cancellationToken);
+        var openLibraryResponse = await GetBooksFromOpenLibraryAsync(normalizedReadings, normalizedQuery, cancellationToken);
 
         logger.LogInformation("\nTotal Unique Result Count: {total}\n", openLibraryResponse.Count);
 
         var results = openLibraryResponse
             .Select(BookResultMapper.ToBookResult)
             .OfType<BookResult>()
-            //.Take(MaxResults)
+            .Take(MaxResults)
             .ToList();
 
         // Use Gemeni to Rank & Explain openLibraryResponse
@@ -99,8 +113,17 @@ public class BookSearchService(IGeminiClient gemini, IOpenLibraryClient openLibr
 
         // Task.WhenAll keeps the order it was given, so the most likely reading's works still come first.
         var searches = await Task.WhenAll(requests.Select(request => SearchWorksAsync(request, cancellationToken)));
+
+        // A refused reading is only logged while others got through. When Open Library refused every one,
+        // the client is told why, with all of Open Library's reasons.
+        var rejections = searches.Select(search => search.Rejection).OfType<OpenLibraryQueryRejectedException>().ToList();
+        if (rejections.Count == searches.Length)
+        {
+            throw new OpenLibraryQueryRejectedException(rejections.SelectMany(rejection => rejection.Reasons).Distinct().ToList());
+        }
+
         var uniqueResults = searches
-            .SelectMany(docs => docs)
+            .SelectMany(search => search.Docs)
             .DistinctBy(doc => doc.Key)
             .ToList();
 
@@ -127,9 +150,10 @@ public class BookSearchService(IGeminiClient gemini, IOpenLibraryClient openLibr
 
     /// <summary>
     /// Sends one search to Open Library and logs it with every work it found. A search Open Library refuses,
-    /// such as q=the or a q under 3 characters, finds no works: it isn't an outage, and asking again would be refused again.
+    /// such as q=the or a q under 3 characters, comes back with no works and the refusal, so the caller can
+    /// decide whether the user needs to hear about it.
     /// </summary>
-    private async Task<IReadOnlyList<WorkSearchDoc>> SearchWorksAsync(WorkSearchRequest request, CancellationToken cancellationToken)
+    private async Task<(IReadOnlyList<WorkSearchDoc> Docs, OpenLibraryQueryRejectedException? Rejection)> SearchWorksAsync(WorkSearchRequest request, CancellationToken cancellationToken)
     {
         IReadOnlyList<WorkSearchDoc> docs;
         try
@@ -139,7 +163,7 @@ public class BookSearchService(IGeminiClient gemini, IOpenLibraryClient openLibr
         catch (OpenLibraryQueryRejectedException ex)
         {
             logger.LogInformation("Open Library refused the search {Search}: {Reasons}", Describe(request), string.Join("; ", ex.Reasons));
-            return [];
+            return ([], ex);
         }
 
         logger.LogInformation(
@@ -147,7 +171,7 @@ public class BookSearchService(IGeminiClient gemini, IOpenLibraryClient openLibr
             Describe(request),
             docs.Count,
             string.Join("\n", docs.Select(doc => $"  {doc.WorkId} \"{doc.Title}\" by {string.Join(", ", doc.AuthorNames)} ({doc.FirstPublishYear})")));
-        return docs;
+        return (docs, null);
     }
 
     /// <summary>A search's fields as they are sent, for example: title="the hobbit" author="j r r tolkien".</summary>

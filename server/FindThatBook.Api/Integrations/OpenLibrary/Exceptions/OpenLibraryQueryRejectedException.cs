@@ -2,8 +2,8 @@ namespace FindThatBook.Api.Integrations.OpenLibrary.Exceptions;
 
 /// <summary>
 /// Open Library answered, but refused the query (a 422), for example "the" or anything under
-/// 3 characters. It is not an outage: the same query will be refused again, so the caller should
-/// treat it as a query with no matches rather than retry.
+/// 3 characters. It is not an outage: the same query will be refused again, so retrying won't help.
+/// The caller decides whether to treat it as no matches or to pass the reasons on.
 /// </summary>
 public class OpenLibraryQueryRejectedException(IReadOnlyList<string> reasons)
     : Exception(reasons.Count > 0
