@@ -64,10 +64,20 @@ docker compose up --build
 ```
 docker compose run --rm server-tests
 docker compose run --rm client-tests
+docker compose run --rm --build e2e-tests
 ```
 
 - `server-tests` runs the server's xUnit tests in the .NET 10 SDK container.
 - `client-tests` runs the Angular unit tests with Vitest in a Node container. Tests use jsdom, so no browser is needed.
+- `e2e-tests` runs the Playwright tests in `client/e2e/` in a real Chromium browser, against the built site in the `web` container. The search API is answered inside the browser, so these tests need no Gemini key and never call Open Library. `--build` rebuilds the site first, so the tests see the current code. Playwright's Docker image and `@playwright/test` in `client/package.json` must have the same version (1.55.0).
+
+The browser opens in a window on your desktop, and every action is slowed down so you can follow it: Playwright waits 800 ms between actions, and each test leaves its last page on screen for 2 seconds. The window comes from the container through WSLg's display, so this needs Docker Desktop with WSL 2 on Windows 11. To run without a window at full speed, for example in CI:
+
+```
+docker compose run --rm -e HEADLESS=true -e SLOW_MO=0 -e END_PAUSE_MS=0 e2e-tests
+```
+
+`SLOW_MO` and `END_PAUSE_MS` also change the speed of a visible run, in milliseconds.
 
 Both services are in a Compose profile, so `docker compose up` doesn't start them.
 
@@ -85,6 +95,7 @@ Every server requirement in the brief has tests, and none of them touch the netw
 - **Stages that call a service are tested against a fake of it:** the reader and explainer against a fake Gemini, the finder against a fake Open Library.
 - **`BookSearchService` is tested with fakes of its stages,** so each test checks the order and limits of the search on its own.
 - **`BookSearchEndpointTests` runs whole searches through ASP.NET and every stage,** with only Gemini and Open Library faked, to check the response the brief describes and its error statuses.
+- **Playwright tests check the page in a real browser.** `client/e2e/search-button.spec.ts` covers the search button: disabled until something is typed, searching on click and on Enter with the text trimmed, "Searching…" blocking a second search, and the no-results and unavailable messages. The API is answered with `page.route`, so the tests check the page alone.
 
 | Brief requirement | Tests |
 |---|---|

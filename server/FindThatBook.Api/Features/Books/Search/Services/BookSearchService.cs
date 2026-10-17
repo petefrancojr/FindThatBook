@@ -35,22 +35,13 @@ public class BookSearchService(IQueryReader queryReader, ICandidateFinder candid
 
         var openLibraryResponse = await candidateFinder.FindAsync(readings, normalizedQuery, cancellationToken);
 
-        logger.LogInformation("\nTotal Unique Result Count: {total}\n", openLibraryResponse.Count);
+        logger.LogDebug("\nTotal Unique Result Count: {total}\n", openLibraryResponse.Count);
 
         var candidates = PrimaryAuthorResolver.Resolve(openLibraryResponse);
 
-        // foreach (var candidate in candidates.Where(candidate => candidate.Authors.Count > 1))
-        // {
-        //     logger.LogDebug(
-        //         "Authors of {WorkId} \"{Title}\": {Authors}",
-        //         candidate.Work.WorkId,
-        //         candidate.Work.Title,
-        //         string.Join("; ", candidate.Authors.Select(author => $"{author.Name} = {author.Credit} ({author.Reason})")));
-        // }
-
         var canonicalWorks = WorkConsolidator.Consolidate(candidates);
 
-        logger.LogInformation("\nCanonical Work Count: {total}\n", canonicalWorks.Count);
+        logger.LogDebug("\nCanonical Work Count: {total}\n", canonicalWorks.Count);
 
         // The first reading is the most likely one, so the works are ranked against it.
         var mostLikelyReading = readings.FirstOrDefault();

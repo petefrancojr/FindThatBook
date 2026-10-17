@@ -53,6 +53,25 @@ services:
       - client-node-modules:/app/node_modules
     command: sh -c "npm ci --no-audit --no-fund && npx ng test --watch=false"
 
+  e2e-tests:
+    # Playwright's image ships the browsers; its version must match @playwright/test in client/package.json.
+    image: mcr.microsoft.com/playwright:v1.55.0-noble
+    profiles: ["test"]
+    depends_on:
+      - web
+    working_dir: /app
+    environment:
+      BASE_URL: http://web
+      # The browser window is shown on the Windows desktop through WSLg's X server (Docker Desktop with WSL 2).
+      DISPLAY: ":0"
+    volumes:
+      - ./client:/app
+      # Its own node_modules: the Playwright image is Ubuntu, and native packages built for Alpine won't load.
+      - e2e-node-modules:/app/node_modules
+      - /run/desktop/mnt/host/wslg/.X11-unix:/tmp/.X11-unix
+    command: sh -c "npm ci --no-audit --no-fund && npx playwright test"
+
 volumes:
   nuget-cache:
   client-node-modules:
+  e2e-node-modules:
