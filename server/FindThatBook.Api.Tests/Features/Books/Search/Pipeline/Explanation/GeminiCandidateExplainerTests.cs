@@ -38,9 +38,24 @@ public class GeminiCandidateExplainerTests
         Assert.Equal("OL219602W", sent.GetProperty("id").GetString());
         Assert.Equal("B", sent.GetProperty("tier").GetString());
         Assert.Equal("exact", sent.GetProperty("title_match").GetString());
-        Assert.Equal("only a contributor", sent.GetProperty("reading_author_on_work").GetString());
+        Assert.Equal("only a contributor, not a primary author", sent.GetProperty("reading_author_on_work").GetString());
         Assert.Equal("The Hobbit", sent.GetProperty("title").GetString());
         Assert.Equal(1990, sent.GetProperty("first_publish_year").GetInt32());
+    }
+
+    [Theory]
+    [InlineData("j r r tolkien", "primary author, exact name match")]
+    [InlineData("tolkien", "primary author, partial or misspelled name")]
+    [InlineData("frank herbert", "not a primary author or contributor")]
+    [InlineData(null, "the reading has no author")]
+    public async Task SendsHowCloselyTheAuthorMatched(string? author, string expected)
+    {
+        var hobbit = CandidateRanker.Rank(ReadingOf("the hobbit", author), [Candidate(Work("OL27482W", "The Hobbit", ["J.R.R. Tolkien"]), Primary("J.R.R. Tolkien"))])[0];
+        var gemini = FakeGeminiClient.Answering("""{ "explanations": [] }""");
+
+        await CreateExplainer(gemini).ExplainAsync("hobbit", ReadingOf("the hobbit", author), [hobbit]);
+
+        Assert.Equal(expected, SentCandidate(gemini).GetProperty("reading_author_on_work").GetString());
     }
 
     [Fact]

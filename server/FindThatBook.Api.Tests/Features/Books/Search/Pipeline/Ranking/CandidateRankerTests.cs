@@ -131,12 +131,67 @@ public class CandidateRankerTests
     }
 
     [Fact]
-    public void RecordsTheFactsTheTierWasDecidedFrom()
+    public void RecordsAContributorMatchApartFromThePrimaryAuthorMatch()
     {
         var match = Assert.Single(CandidateRanker.Rank(ReadingOf("the hobbit", "charles dixon"), [DixonsHobbit])).Match!;
 
         Assert.Equal(TitleMatch.Exact, match.Title);
-        Assert.Equal(AuthorMatch.Contributor, match.Author);
-        Assert.Equal("Charles Dixon", match.MatchedAuthor!.Name);
+        Assert.Equal(AuthorMatch.None, match.Author);
+        Assert.Null(match.MatchedAuthor);
+        Assert.Equal(AuthorMatch.Exact, match.Contributor);
+        Assert.Equal("Charles Dixon", match.MatchedContributor!.Name);
+    }
+
+    [Theory]
+    [InlineData("j r r tolkien", AuthorMatch.Exact)]
+    [InlineData("tolkien", AuthorMatch.Loose)]
+    [InlineData("tolkein", AuthorMatch.Loose)]
+    [InlineData("j r r tolkein", AuthorMatch.Loose)]
+    [InlineData("k r r tolkien", AuthorMatch.None)]
+    [InlineData("charles dixon", AuthorMatch.None)]
+    public void MatchesTheReadingsAuthorAgainstThePrimaryAuthorAtThreeLevels(string author, AuthorMatch expected)
+    {
+        var match = Assert.Single(CandidateRanker.Rank(ReadingOf("the hobbit", author), [Hobbit])).Match!;
+
+        Assert.Equal(expected, match.Author);
+    }
+
+    [Theory]
+    [InlineData("j r r tolkien")]
+    [InlineData("tolkein")]
+    public void GivesTierAForAnExactOrLooseAuthorMatch(string author) => Assert.Equal("A", TierOf(Hobbit, "the hobbit", author));
+
+    [Fact]
+    public void PutsAnExactAuthorMatchBeforeALooseOneInTheSameTier()
+    {
+        var loose = Candidate(Work("OL1W", "The Hobbit", ["J.R.R. Tolkien"]), Primary("J.R.R. Tolkien"));
+        var exact = Candidate(Work("OL2W", "The Hobbit", ["Tolkien"]), Primary("Tolkien"));
+
+        var ranked = CandidateRanker.Rank(ReadingOf("the hobbit", "tolkien"), [loose, exact]);
+
+        Assert.Equal(["OL2W", "OL1W"], ranked.Select(candidate => candidate.Work.WorkId));
+        Assert.Equal(["A", "A"], ranked.Select(candidate => candidate.Tier));
+    }
+
+    [Fact]
+    public void DoesNotCountAListedAuthorAsAPrimaryAuthor()
+    {
+        var goodOmens = Candidate(Work("OL453936W", "Good Omens", ["Terry Pratchett", "Neil Gaiman"]), Listed("Terry Pratchett"), Listed("Neil Gaiman"));
+
+        var ranked = Assert.Single(CandidateRanker.Rank(ReadingOf("good omens", "neil gaiman"), [goodOmens]));
+
+        Assert.Equal(AuthorMatch.None, ranked.Match!.Author);
+        Assert.Equal("E", ranked.Tier);
+    }
+
+    [Fact]
+    public void TreatsAPersonInAKeywordOnlyReadingAsTheAuthor()
+    {
+        var silmarillion = Candidate(Work("OL27495W", "The Silmarillion", ["J.R.R. Tolkien"]), Primary("J.R.R. Tolkien"));
+
+        var ranked = Assert.Single(CandidateRanker.Rank(ReadingOf(null, null, "tolkien", "elves"), [silmarillion]));
+
+        Assert.Equal(AuthorMatch.Loose, ranked.Match!.Author);
+        Assert.Equal("D", ranked.Tier);
     }
 }

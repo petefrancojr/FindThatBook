@@ -16,33 +16,35 @@ public class GeminiQueryReader(IGeminiClient gemini, ILogger<GeminiQueryReader> 
     private static readonly string ReadQueryInstruction = $"""
         You read messy library search text and work out which book the person is looking for.
         The text may hold a title, an author, a character's name, a year, special keywords, or a mix of these,
-        often misspelled, abbreviated or in any order.
+        often misspelled, abbreviated or in any order. You can only build a reading from the words in the search text.
+        You are not allowed to add words to the readings that did not come from the search text.
 
         Return {MaxReadings} readings of the search, most likely first. You are allowed to provide duplicate readings only after all possible arrangements have been exhausted.
         The first reading is the complete one: it holds every title, author and keyword you identified, because the
         books found are ranked against it. The readings that split the search come after it.
-        - title: the book's full, correctly spelled title, only if the search points to one.
-        - author: the author's full, correctly spelled name, only if the search points to one. A person the search
-          names who worked on a book in another way, such as its adapter or illustrator, also goes here.
+        - title: the book's full, correctly spelled title, only if the search text contains one.
+        - author: the author's full, correctly spelled name, only if the search text contains one.
         - keywords: the other useful words from the search, such as character names, places,
           subjects or a year, spelled correctly. If a word from the search is an author or the title,
-          then it must be omitted from the keywords list.
+          then it must initially be omitted from the keywords list.
 
-        Only use words and terms the search provides. You may correct their spelling and complete a partial title
-        or name that is in the search ("hobbit" can become "The Hobbit"), but never add a title, author or keyword
-        that is not in the search. Leave title or author out rather than guess.
+        Only use words and terms the search provides. You may correct their spelling and complete a partial word
+        or name that is in the search, but never add a title, never add an author and never add a keyword
+        that is not in the search text. For example, if I give you a title such as "catch 22", you are not allowed 
+        to insert "Joseph Heller" into a reading, because it does not exist in the original search text. A reading 
+        without a title or an author is acceptable.
 
         Readings that split the search in different ways help find the book:
         - Include a reading with all terms as keywords.
-        - If you can identify a title, include a reading with just the title.
-        - If you can identify an author, include a reading with just the author.
-        - If you can identify both, include a reading with just the title and the author.
-        - If you can identify a title and keywords, include a reading with just the title and the keywords.
-        - If you can identify a title, include a reading with the title as a keyword then make the title null.
-        - If you can identify an author and keywords, include a reading with the author and the keywords.
-        - If you can identify an author, include a reading with the author as a keyword then make the author null.
+        - If you can identify a title from the provided search text, include a reading with just the title.
+        - If you can identify an author from the provided search text, include a reading with just the author.
+        - If you can identify both from the provided search text, include a reading with just the title and the author.
+        - If you can identify a title and keywords from the provided search text, include a reading with just the title and the keywords.
+        - If you can identify a title from the provided search text, include a reading with the title as a keyword then make the title null.
+        - If you can identify an author and keywords from the provided search text, include a reading with the author and the keywords.
+        - If you can identify an author from the provided search text, include a reading with the author as a keyword then make the author null.
 
-        It is important that the most complete and accurate reading is provided first.
+        It is important that the most accurate reading is provided first. 
         """;
 
     // Must stay above ReadingsSchema: static fields are set up in the order they're written.
@@ -102,7 +104,7 @@ public class GeminiQueryReader(IGeminiClient gemini, ILogger<GeminiQueryReader> 
 
             foreach (var reading in normalizedReadings)
             {
-                // logger.LogInformation("\n\n===========\nTitle:{title}\nAuthor:{author}\nKeyWords: [{keywords}]\n===========\n\n", reading.Title, reading.Author, string.Join(",\n", reading.Keywords));
+                logger.LogInformation("\n\n===========\nTitle:{title}\nAuthor:{author}\nKeyWords: [{keywords}]\n===========\n\n", reading.Title, reading.Author, string.Join(",\n", reading.Keywords));
             }
 
             return normalizedReadings;

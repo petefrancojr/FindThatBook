@@ -11,18 +11,23 @@ namespace FindThatBook.Api.Features.Books.Search.Pipeline.Ranking;
 /// search always gets the same tiers.
 /// </summary>
 /// <remarks>
+/// The reading's author is matched against the work's primary authors at one of three levels: exact (the same name
+/// once normalized), loose (part of the name, or a small misspelling) or none. Listed authors, whose role Open Library
+/// doesn't show, don't count. Only when no primary author matches is the reading's author looked for among the
+/// contributors, for tier B.
 /// <list type="table">
-/// <item><term>A</term><description>Exact title, and the reading's author is a primary or listed author.
+/// <item><term>A</term><description>Exact title, and an exact or loose match with a primary author.
 /// With no author in the reading, an exact title and a work with a primary or listed author.</description></item>
-/// <item><term>B</term><description>Exact title, but the reading's author is only a contributor.
+/// <item><term>B</term><description>Exact title, but the reading's author only matches a contributor.
 /// With no author in the reading, an exact title on a work whose people are all contributors.</description></item>
 /// <item><term>C</term><description>Near title (missing or extra words, a small misspelling), and the reading's
-/// author is on the work in any role.</description></item>
-/// <item><term>D</term><description>The reading has an author but no title, and the author is a primary or
-/// listed author: the author-only fallback. A reading with a title that doesn't match is E, so an unrelated book
-/// by someone with the same surname doesn't rank as a match.</description></item>
+/// author matches a primary author or a contributor.</description></item>
+/// <item><term>D</term><description>The reading has an author but no title, and the author matches a primary
+/// author: the author-only fallback. A reading with a title that doesn't match is E, so an unrelated book by
+/// someone with the same surname doesn't rank as a match.</description></item>
 /// <item><term>E</term><description>Anything else, including every candidate when there is no reading.</description></item>
 /// </list>
+/// Within a tier, an exact author match comes before a loose one, and otherwise works keep the order they were found in.
 /// </remarks>
 public static class CandidateRanker
 {
@@ -53,6 +58,7 @@ public static class CandidateRanker
             })
             // The tiers run A to E, so alphabetical order is best first. OrderBy is stable, so ties keep their order.
             .OrderBy(candidate => candidate.Tier, StringComparer.Ordinal)
+            .ThenBy(candidate => candidate.Match!.Author == AuthorMatch.Loose ? 1 : 0)
             .ToList();
     }
 
@@ -60,7 +66,8 @@ public static class CandidateRanker
     /// The names to look for on each work: the reading's author. Gemini sometimes keeps a person's name as a keyword
     /// instead ("dixon hobbit" gives the keyword "dixon"), so without an author, a keyword counts as a person when it
     /// names someone on a work whose title matches the reading's. That keeps out a character's name such as "bennet",
-    /// which can match an unrelated author called Bennet but no one on Pride and Prejudice.
+    /// which can match an unrelated author called Bennet but no one on Pride and Prejudice. A reading with no title
+    /// has nothing to narrow by, so its keywords are checked against every candidate.
     /// </summary>
     private static IReadOnlyList<string> AuthorNames(QueryReading? reading, IReadOnlyList<BookCandidate> candidates)
     {
@@ -74,14 +81,12 @@ public static class CandidateRanker
             return [reading.Author];
         }
 
-        if (reading.Title is null)
-        {
-            return [];
-        }
-
-        var sameTitle = candidates.Where(candidate => CompareTitle(reading.Title, candidate) is TitleMatch.Exact or TitleMatch.Near).ToList();
+        // Without a title, a keyword can name someone on any candidate.
+        var sameTitle = reading.Title is null
+            ? candidates
+            : candidates.Where(candidate => CompareTitle(reading.Title, candidate) is TitleMatch.Exact or TitleMatch.Near).ToList();
         return reading.Keywords
-            .Where(keyword => sameTitle.Any(candidate => candidate.Authors.Any(author => PersonNames.Match(keyword, author.Name))))
+            .Where(keyword => sameTitle.Any(candidate => candidate.Authors.Any(author => CompareNames(keyword, author.Name) != AuthorMatch.None)))
             .ToList();
     }
 
@@ -94,36 +99,100 @@ public static class CandidateRanker
             return new CandidateMatch { Title = title, Author = AuthorMatch.NotGiven };
         }
 
-        var matched = BestCredited(candidate, authorNames);
-        return new CandidateMatch { Title = title, Author = matched is null ? AuthorMatch.None : ToAuthorMatch(matched), MatchedAuthor = matched };
+        var (author, matchedAuthor) = BestMatch(candidate.PrimaryAuthors, authorNames);
+        if (author != AuthorMatch.None)
+        {
+            return new CandidateMatch { Title = title, Author = author, MatchedAuthor = matchedAuthor };
+        }
+
+        var (contributor, matchedContributor) = BestMatch(candidate.Contributors, authorNames);
+        return new CandidateMatch
+        {
+            Title = title,
+            Author = AuthorMatch.None,
+            Contributor = contributor,
+            MatchedContributor = matchedContributor,
+        };
     }
 
-    /// <summary>The person on the work matching one of the names, with the best credit when several match.</summary>
-    private static CandidateAuthor? BestCredited(BookCandidate candidate, IReadOnlyList<string> names) =>
-        candidate.Authors
-            .Where(author => names.Any(name => PersonNames.Match(name, author.Name)))
-            .OrderBy(author => author.Credit)
-            .FirstOrDefault();
-
-    private static AuthorMatch ToAuthorMatch(CandidateAuthor author) =>
-        author.Credit switch
+    /// <summary>The closest match between the names and the people, exact before loose.</summary>
+    private static (AuthorMatch Level, CandidateAuthor? Person) BestMatch(IEnumerable<CandidateAuthor> people, IReadOnlyList<string> names)
+    {
+        var best = (Level: AuthorMatch.None, Person: (CandidateAuthor?)null);
+        foreach (var person in people)
         {
-            AuthorCredit.Primary => AuthorMatch.Primary,
-            AuthorCredit.Listed => AuthorMatch.Listed,
-            _ => AuthorMatch.Contributor,
-        };
+            foreach (var name in names)
+            {
+                var level = CompareNames(name, person.Name);
+                if (level == AuthorMatch.Exact)
+                {
+                    return (level, person);
+                }
+
+                if (level == AuthorMatch.Loose && best.Level == AuthorMatch.None)
+                {
+                    best = (level, person);
+                }
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// Exact when the names are the same once normalized ("j r r tolkien" and "J.R.R. Tolkien"). Loose when every
+    /// word of the shorter name matches a word of the longer one, allowing a small misspelling in longer words:
+    /// "tolkien" and "tolkein" both loosely match "J.R.R. Tolkien".
+    /// </summary>
+    private static AuthorMatch CompareNames(string first, string second)
+    {
+        var firstKey = PersonNames.Key(first);
+        var secondKey = PersonNames.Key(second);
+        if (firstKey.Length == 0 || secondKey.Length == 0)
+        {
+            return AuthorMatch.None;
+        }
+
+        if (firstKey == secondKey)
+        {
+            return AuthorMatch.Exact;
+        }
+
+        var firstWords = firstKey.Split(' ');
+        var secondWords = secondKey.Split(' ');
+        var (shorter, longer) = firstWords.Length <= secondWords.Length ? (firstWords, secondWords) : (secondWords, firstWords);
+        return shorter.All(word => longer.Any(other => WordsAlike(word, other))) ? AuthorMatch.Loose : AuthorMatch.None;
+    }
+
+    /// <summary>
+    /// The same word, or a misspelling of it: one changed letter in a word of 4 or 5 letters, two in a longer word.
+    /// Initials and short words must match exactly.
+    /// </summary>
+    private static bool WordsAlike(string first, string second)
+    {
+        if (first == second)
+        {
+            return true;
+        }
+
+        var longest = Math.Max(first.Length, second.Length);
+        var allowed = longest >= 6 ? 2 : longest >= 4 ? 1 : 0;
+        return allowed > 0 && EditDistance(first, second) <= allowed;
+    }
 
     private static string TierFor(CandidateMatch match, BookCandidate candidate)
     {
         var writtenBySomeone = candidate.Authors.Any(author => author.Credit is AuthorCredit.Primary or AuthorCredit.Listed);
+        var primaryMatched = match.Author is AuthorMatch.Exact or AuthorMatch.Loose;
+        var contributorMatched = match.Contributor is AuthorMatch.Exact or AuthorMatch.Loose;
 
-        return (match.Title, match.Author) switch
+        return match.Title switch
         {
-            (TitleMatch.Exact, AuthorMatch.Primary or AuthorMatch.Listed) => "A",
-            (TitleMatch.Exact, AuthorMatch.Contributor) => "B",
-            (TitleMatch.Exact, AuthorMatch.NotGiven) => writtenBySomeone ? "A" : "B",
-            (TitleMatch.Near, AuthorMatch.Primary or AuthorMatch.Listed or AuthorMatch.Contributor) => "C",
-            (TitleMatch.NotGiven, AuthorMatch.Primary or AuthorMatch.Listed) => "D",
+            TitleMatch.Exact when primaryMatched => "A",
+            TitleMatch.Exact when contributorMatched => "B",
+            TitleMatch.Exact when match.Author == AuthorMatch.NotGiven => writtenBySomeone ? "A" : "B",
+            TitleMatch.Near when primaryMatched || contributorMatched => "C",
+            TitleMatch.NotGiven when primaryMatched => "D",
             _ => "E",
         };
     }

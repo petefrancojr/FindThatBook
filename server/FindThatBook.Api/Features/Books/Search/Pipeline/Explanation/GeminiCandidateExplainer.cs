@@ -23,26 +23,26 @@ public class GeminiCandidateExplainer(IGeminiClient gemini, ILogger<GeminiCandid
 
         Write one sentence for each candidate that explains its tier from those facts:
         - Say how the title compares with the reading: exact, near, or different.
-        - Say how the reading's author is credited on the work: primary author, listed author, only a contributor,
-          or not on the work.
+        - Say how the read author compares with the candidate author (use author matcher): Not Given, Exact, Loose, None
         - Name the primary authors, and name contributors with their role when they matter. Only people in
           primary_authors are primary authors. When it is empty, call the people in listed_authors the listed
           authors, and don't say which of them wrote the book.
-        For example: "Exact title; Tolkien is primary author; Dixon listed as adapter."
+        For example: "Exact title; exact author match; Tolkien is primary author; Dixon listed as adapter."
+        Or: "Exact title; No matching author; Tolkien is primary author."
 
         Write for the person who searched: call the reading "your search", and leave out what the search didn't give
-        (if it named no author, don't mention one).
-        Use only the facts and fields given for that candidate. Never add anything that is not in them, and never
+        (if the reading named no author, don't mention one).
+        Use only the facts and fields given for that candidate and for that reading. Never add anything that is not in both of them, and never
         disagree with the tier. Use each candidate's id exactly as given.
         """;
 
     /// <summary>What each tier means, sent with the candidates so the explanation can say why it was given.</summary>
     private static readonly Dictionary<string, string> TierMeanings = new()
     {
-        ["A"] = "exact title, and the reading's author is a primary or listed author (or the reading has no author)",
+        ["A"] = "exact title, and the reading's author matches a primary author exactly or loosely (or the reading has no author)",
         ["B"] = "exact title, but the reading's author is only a contributor (or everyone on the work is a contributor)",
-        ["C"] = "near title, and the reading's author is on the work",
-        ["D"] = "author-only match: the reading names an author but no title, and the author is a primary or listed author",
+        ["C"] = "near title, and the reading's author matches a primary author or a contributor",
+        ["D"] = "author-only match: the reading names an author but no title, and the author matches a primary author",
         ["E"] = "no clear match",
     };
 
@@ -99,6 +99,7 @@ public class GeminiCandidateExplainer(IGeminiClient gemini, ILogger<GeminiCandid
         try
         {
             explanations = JsonSerializer.Deserialize<CandidateExplanations>(response.Text, JsonOptions)?.Explanations ?? [];
+            LogExplanations(reading, toExplain, explanations);
         }
         catch (JsonException ex)
         {
@@ -129,6 +130,57 @@ public class GeminiCandidateExplainer(IGeminiClient gemini, ILogger<GeminiCandid
     }
 
     /// <summary>
+    /// Logs each explanation Gemini returned with the reading it explains against and the candidate it explains,
+    /// so an odd explanation can be traced to the facts it was given. An id that matches no candidate is logged too.
+    /// </summary>
+    private void LogExplanations(QueryReading? reading, IReadOnlyList<BookCandidate> candidates, IReadOnlyList<CandidateExplanation> explanations)
+    {
+        if (!logger.IsEnabled(LogLevel.Debug))
+        {
+            return;
+        }
+
+        var readingText = reading is null
+            ? "none"
+            : $"title={Quoted(reading.Title)} author={Quoted(reading.Author)} keywords=[{string.Join(", ", reading.Keywords)}]";
+        var byId = candidates.Where(candidate => candidate.Work.WorkId is not null).DistinctBy(candidate => candidate.Work.WorkId).ToDictionary(candidate => candidate.Work.WorkId!);
+
+        foreach (var explanation in explanations)
+        {
+            if (!byId.TryGetValue(explanation.Id.Trim(), out var candidate))
+            {
+                logger.LogDebug("Gemini explained {WorkId}, which is not one of the candidates: {Explanation}", explanation.Id, explanation.Explanation);
+                continue;
+            }
+
+            logger.LogDebug(
+                "Explanation for {WorkId} \"{Title}\" (tier {Tier}, title {TitleMatch}, author {AuthorMatch}, contributor {ContributorMatch}; primary authors [{PrimaryAuthors}]; contributors [{Contributors}]) against reading {Reading}: {Explanation}",
+                candidate.Work.WorkId,
+                candidate.Work.Title,
+                candidate.Tier,
+                candidate.Match?.Title,
+                candidate.Match?.Author,
+                candidate.Match?.Contributor,
+                string.Join(", ", candidate.PrimaryAuthors.Select(author => author.Name)),
+                string.Join(", ", candidate.Contributors.Select(author => author.Role is null ? author.Name : $"{author.Name} ({author.Role})")),
+                readingText,
+                explanation.Explanation);
+        }
+
+        static string Quoted(string? text) => text is null ? "none" : $"\"{text}\"";
+    }
+
+    /// <summary>How the reading's author compares with the work's people, in words Gemini can repeat.</summary>
+    private static string DescribeAuthorMatch(CandidateMatch? match) => match switch
+    {
+        { Author: AuthorMatch.Exact } => "primary author, exact name match",
+        { Author: AuthorMatch.Loose } => "primary author, partial or misspelled name",
+        { Contributor: AuthorMatch.Exact or AuthorMatch.Loose } => "only a contributor, not a primary author",
+        { Author: AuthorMatch.None } => "not a primary author or contributor",
+        _ => "the reading has no author",
+    };
+
+    /// <summary>
     /// The user's message: the search, the reading, and each candidate's tier, the facts behind it and the fields
     /// Open Library returned, as JSON. Nothing else is sent, so the explanations can't draw on anything else.
     /// </summary>
@@ -149,15 +201,10 @@ public class GeminiCandidateExplainer(IGeminiClient gemini, ILogger<GeminiCandid
                     TitleMatch.None => "different",
                     _ => "the reading has no title",
                 },
-                reading_author_on_work = candidate.Match?.Author switch
-                {
-                    AuthorMatch.Primary => "primary author",
-                    AuthorMatch.Listed => "listed author",
-                    AuthorMatch.Contributor => "only a contributor",
-                    AuthorMatch.None => "not on the work",
-                    _ => "the reading has no author",
-                },
-                matched_person = candidate.Match?.MatchedAuthor is { } person ? new { name = person.Name, role = person.Role } : null,
+                reading_author_on_work = DescribeAuthorMatch(candidate.Match),
+                matched_person = (candidate.Match?.MatchedAuthor ?? candidate.Match?.MatchedContributor) is { } person
+                    ? new { name = person.Name, role = person.Role }
+                    : null,
                 title = candidate.Work.Title,
                 subtitle = candidate.Work.Subtitle,
                 first_publish_year = candidate.Work.FirstPublishYear,

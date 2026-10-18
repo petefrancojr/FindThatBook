@@ -57,7 +57,7 @@ The reader types one free-text search into the Angular page. The page calls `GET
    ▼  Mapping        the books become the response: title, authors, contributors, year, ID, link, cover, tier, explanation
    │
    ▼
-1. The Hobbit · J.R.R. Tolkien · 1937 · A · "Exact title; J.R.R. Tolkien is primary author."
+1. The Hobbit · J.R.R. Tolkien · 1937 · A · "Exact title; exact author match; J.R.R. Tolkien is primary author."
 ```
 
 Gemini does the two jobs that need language: understanding the messy search, and writing the explanations. Everything that must be the same every time, such as normalizing text, merging duplicates, telling authors from contributors and choosing tiers, is done by rules in code, which the tests check directly. Each stage has its own folder under `server/FindThatBook.Api/Features/Books/Search/Pipeline/`.
@@ -223,7 +223,7 @@ Search runs in steps: Gemini reads the search into readings, Open Library is sea
 - **Gemini is the AI,** as the brief suggests, using the model set in `Gemini:Model` in `appsettings.json` (`gemini-3.5-flash-lite`). Changing the model needs no code change.
 - **Up to ten results instead of five.** The brief's tier E says "return up to 5 ordered candidates". Ten gives the reader more to choose from when the search is vague; the limit is one constant, `MaxResults` in `BookSearchService`.
 - **The first reading is the most likely one.** Gemini is told to put the complete reading first, with every title, author and keyword it found, and every book is ranked against that reading. The other readings only widen the Open Library search.
-- **Nothing is added that the search didn't give.** Gemini may correct spelling and complete a title or name the search names (`hobbit` becomes *The Hobbit*), but not add an author or title the reader didn't type. A search for `hobbit` is therefore ranked on the title alone.
+- **Nothing is added that the search didn't give.** Gemini may correct spelling and complete a title or name the search names (`hobbit` becomes *The Hobbit*), but not add an author or title the reader didn't type: `catch 22` must not gain "Joseph Heller". A search for `hobbit` is therefore ranked on the title alone.
 - **Open Library's data is used as it is.** Where its records are incomplete or inconsistent, such as missing roles or duplicate works, the app works around them with rules and doesn't try to correct the data.
 - **A refused search is the reader's to change.** When Open Library refuses every search made from the readings (for example `the`), its reason is passed on with a `422` rather than hidden behind an empty result.
 
@@ -375,21 +375,34 @@ Measured on live data before it was built: across 20 classics, 108 of 111 extra 
 
 Each canonical work is compared with the **first** reading, which the prompt makes the complete one (every title, author and keyword Gemini identified). `CandidateRanker` gives it a tier from the brief's hierarchy, and the works are ordered by tier, keeping the search order within a tier. `GeminiCandidateExplainer` then writes one sentence for each of the ten that are returned, from the tier and the facts that decided it.
 
-| Title compared with the reading | The reading's author on the work | Tier |
+The reading's author is matched against the work's **primary authors** at three levels:
+
+| Level | Meaning | Example against "J.R.R. Tolkien" |
 |---|---|---|
-| Exact | primary or listed author | **A** |
-| Exact | only a contributor | **B** |
+| **Exact** | the same name once normalized | `j r r tolkien` |
+| **Loose** | part of the name, or a small misspelling | `tolkien`, `tolkein` |
+| **None** | a different person | `charles dixon` |
+
+Listed authors, whose role Open Library doesn't show, don't count as primary. Only when no primary author matches is the reading's author looked for among the **contributors**, for tier B.
+
+| Title compared with the reading | The reading's author | Tier |
+|---|---|---|
+| Exact | matches a primary author, exactly or loosely | **A** |
+| Exact | only matches a contributor | **B** |
 | Exact, and the reading names no author | the work has a primary or listed author / only contributors | **A** / **B** |
-| Near | in any role | **C** |
-| The reading names no title | primary or listed author | **D** |
+| Near | matches a primary author or a contributor | **C** |
+| The reading names no title | matches a primary author | **D** |
 | Anything else | | **E** |
 
+Within a tier, an exact author match comes before a loose one, and otherwise works keep the order the readings found them in.
+
 - **"Exact" ignores case, punctuation, accents, a subtitle and small words** such as "a", "the" and "of", so *Tale of Two Cities* is an exact match for *A Tale of Two Cities*. **"Near"** means missing or extra words (*The Hobbit & The Lord of the Rings*) or a small misspelling (*El hobbit*).
-- **Names match loosely:** every word of the shorter name must appear in the longer, so "tolkien" and "j r r tolkien" both match "J.R.R. Tolkien". When several people on a work match, the best credit counts.
-- **A person kept as a keyword still counts.** Gemini sometimes reads "dixon hobbit" as the title *The Hobbit* with the keyword "dixon". A keyword counts as the author when it names someone on a work whose title matches the reading's. So "dixon" counts, and a character's name such as "bennet" doesn't, even though unrelated authors are called Bennet.
+- **A loose match allows a misspelling in longer words only:** one changed letter in a word of 4 or 5 letters, two in a longer word, none in initials or short words. So `tolkein` matches Tolkien, but `j` doesn't match `k`.
+- **Co-written books with no recorded primary author rank lower when an author is searched.** *Good Omens* lists Pratchett and Gaiman without roles, so `good omens gaiman` puts it at E. It still ranks A for a search without an author.
+- **A person kept as a keyword still counts.** Gemini sometimes reads "dixon hobbit" as the title *The Hobbit* with the keyword "dixon". A keyword counts as the author when it names someone on a work whose title matches the reading's. So "dixon" counts, and a character's name such as "bennet" doesn't, even though unrelated authors are called Bennet. A reading with no title and no author has nothing to narrow by, so its keywords are checked against every candidate: `tolkien elves` ranks Tolkien's works as the author-only fallback, D.
 - **D needs the reading to have no title.** It is the brief's author-only fallback. When the reading has a title and a work doesn't match it, the work is E, so an unrelated book by someone with the same surname doesn't rank as a match.
 
-Why the tiers aren't decided by Gemini: an earlier version asked Gemini for the tier too, and on live searches it applied the rules inconsistently. It gave Tolkien's own *Hobbit* a B for "dixon hobbit", rated Austen's novels E ("no author match") for "jane austen", and named people in explanations who weren't on that work. The tiers are mechanical checks, so code makes them the same every time and they can be tested without Gemini. Gemini does the part it is good at: turning the facts into a sentence such as *"Exact title; Charles Dixon listed as adapter."* It receives only each work's own fields and match facts, and is told never to add anything else or disagree with the tier.
+Why the tiers aren't decided by Gemini: an earlier version asked Gemini for the tier too, and on live searches it applied the rules inconsistently. It gave Tolkien's own *Hobbit* a B for "dixon hobbit", rated Austen's novels E ("no author match") for "jane austen", and named people in explanations who weren't on that work. The tiers are mechanical checks, so code makes them the same every time and they can be tested without Gemini. Gemini does the part it is good at: turning the facts into a sentence. It is given each work's tier, how the title compares, the author match level (exact, loose, none, or not given), the primary authors and the contributors with their roles, and writes, for example, *"Exact title; exact author match; Tolkien is primary author; Dixon listed as adapter."* It receives only each work's own fields and match facts, and is told never to add anything else or disagree with the tier. Moving the tiers to Gemini is listed under [Future improvements](#improvements), with what it would need to be reliable.
 
 ### Search text is normalized before it is read
 
@@ -468,6 +481,7 @@ What I would do with more time: first the known limitations, then the improvemen
 
 ### Improvements
 
+- **Move the tier ranking to Gemini.** Let Gemini choose each work's tier, so ranking can weigh context the fixed rules can't, such as which of two exact-title works the search most likely means. An earlier attempt applied the rules inconsistently, so this needs the match facts the code already computes as Gemini's input, the current rules kept as a check and fallback, and the live tests extended to cover the tiers.
 - **Weighted readings.** Ask Gemini how confident it is in each reading, and share the result slots out by that confidence, so a clear search concentrates on one book and a vague one covers more possibilities.
 - **A request ID on every log line and response.** Tie together the log lines one search writes across HTTP, Gemini and Open Library, and return the ID so a `502` a user sees can be matched to the logs.
 - **Searches in more languages.** Transliterate other scripts to Latin letters, split words in languages without spaces, and match a work's titles in other languages, not just its main title.
