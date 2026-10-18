@@ -1,0 +1,34 @@
+{
+  // Opens the repo in a container with Node 24 and the .NET 10 SDK, so neither needs to be installed locally.
+  // Stop the docker compose stack first (`docker compose stop`): it uses the same ports, 4200 and 5080.
+  "name": "Find That Book",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "24" },
+    "ghcr.io/devcontainers/features/dotnet:2": { "version": "10.0" }
+  },
+  // Reads the Gemini key from .env at the repo root, as docker compose does. The file must exist (see .env.example).
+  "runArgs": ["--env-file", "${localWorkspaceFolder}/.env"],
+  // The API reads Gemini__ApiKey; the live tests read GEMINI_API_KEY. Both come from the same key.
+  "remoteEnv": {
+    "Gemini__ApiKey": "${containerEnv:GEMINI_API_KEY}"
+  },
+  // Root, like the docker compose containers. Files they write into the repo (bin/, obj/, .angular/, generated code)
+  // get Linux permissions only root can write past, so a non-root user here fails on them.
+  "remoteUser": "root",
+  // node_modules lives in a volume, so Linux packages never mix with the Windows folder and installs stay fast.
+  "mounts": [
+    "source=findthatbook-devcontainer-node-modules,target=${containerWorkspaceFolder}/client/node_modules,type=volume"
+  ],
+  "postCreateCommand": "cd client && npm ci --no-audit --no-fund && cd ../server && dotnet restore FindThatBook.Api.Tests",
+  "forwardPorts": [4200, 5080],
+  "portsAttributes": {
+    "4200": { "label": "Web app (ng serve)" },
+    "5080": { "label": "API" }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": ["angular.ng-template", "ms-dotnettools.csdevkit"]
+    }
+  }
+}

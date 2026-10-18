@@ -6,7 +6,7 @@ export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
     provideHttpClient(withFetch()),
-    // Call the API on the same origin; nginx proxies /api to the server.
+    // Call the API on the same origin; nginx (or proxy.conf.json under ng serve) proxies /api to the server.
     provideApiConfiguration(''),
   ]
 };
