@@ -14,20 +14,7 @@ namespace FindThatBook.Api.Tests.Integrations.Gemini;
 [Trait("Category", "Live")]
 public class GeminiLiveTests
 {
-    private static IGeminiClient CreateClient()
-    {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Gemini:ApiKey"] = Environment.GetEnvironmentVariable("GEMINI_API_KEY"),
-                ["Gemini:TimeoutSeconds"] = "30",
-            })
-            .Build();
-        var services = new ServiceCollection();
-        services.AddLogging();
-        services.AddGemini(configuration);
-        return services.BuildServiceProvider().GetRequiredService<IGeminiClient>();
-    }
+    private static IGeminiClient CreateClient() => LiveTests.CreateGeminiClient();
 
     [LiveFact]
     public async Task AnswersAPlainTextPrompt()
@@ -70,13 +57,47 @@ public sealed class LiveFactAttribute : FactAttribute
 {
     public LiveFactAttribute()
     {
+        Skip = LiveTests.SkipReason();
+    }
+}
+
+/// <summary>A theory that only runs when live tests are switched on and a key is available.</summary>
+public sealed class LiveTheoryAttribute : TheoryAttribute
+{
+    public LiveTheoryAttribute()
+    {
+        Skip = LiveTests.SkipReason();
+    }
+}
+
+public static class LiveTests
+{
+    /// <summary>Why live tests are skipped, or null when they can run.</summary>
+    public static string? SkipReason()
+    {
         if (!string.Equals(Environment.GetEnvironmentVariable("LIVE_TESTS"), "true", StringComparison.OrdinalIgnoreCase))
         {
-            Skip = "Live tests are off. Set LIVE_TESTS=true to run them.";
+            return "Live tests are off. Set LIVE_TESTS=true to run them.";
         }
-        else if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GEMINI_API_KEY")))
-        {
-            Skip = "GEMINI_API_KEY is not set.";
-        }
+
+        return string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GEMINI_API_KEY"))
+            ? "GEMINI_API_KEY is not set."
+            : null;
+    }
+
+    /// <summary>The real Gemini client, configured from GEMINI_API_KEY, with a longer timeout than the app's.</summary>
+    public static IGeminiClient CreateGeminiClient()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Gemini:ApiKey"] = Environment.GetEnvironmentVariable("GEMINI_API_KEY"),
+                ["Gemini:TimeoutSeconds"] = "30",
+            })
+            .Build();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddGemini(configuration);
+        return services.BuildServiceProvider().GetRequiredService<IGeminiClient>();
     }
 }

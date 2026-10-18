@@ -13,12 +13,12 @@ The reader types one free-text search into the Angular page. The page calls `GET
 "tolkien hobbit illustrated deluxe 1937"
    │
    ▼  Reading        Gemini reads the search into readings: { title?, author?, keywords[] }, most likely first
-   ▼  Finding        Open Library's /search.json is searched once per reading, in parallel
+   ▼  Finding        Open Library's /search.json is searched once per reading, up to three at a time
    ▼  Authors        each work's primary authors are told apart from adapters, illustrators and translators
    ▼  Consolidation  duplicate works for the same book are merged into one canonical work
    ▼  Ranking        each work gets a tier, A to E, by comparing it with the most likely reading
    ▼  Explanation    Gemini writes one sentence per returned book, from the facts behind its tier
-   ▼  Mapping        the books become the response: title, author, year, ID, link, cover, tier, explanation
+   ▼  Mapping        the books become the response: title, authors, contributors, year, ID, link, cover, tier, explanation
    │
    ▼
 1. The Hobbit · J.R.R. Tolkien · 1937 · A · "Exact title; J.R.R. Tolkien is primary author."
@@ -36,7 +36,7 @@ Gemini does the two jobs that need language: understanding the messy search, and
 - **Primary authors told apart from contributors**, so Dixon's graphic novel of *The Hobbit* credits Tolkien. See [Primary authors are told apart from contributors](#primary-authors-are-told-apart-from-contributors).
 - **The brief's matching hierarchy**, tiers A to E, with results ordered best first. See [Tiers are decided by rules; Gemini only explains them](#tiers-are-decided-by-rules-gemini-only-explains-them).
 - **A grounded explanation for each book**, naming the primary author and contributors, with a plain sentence from Open Library's fields when Gemini can't give one.
-- **Error handling:** `400` for a missing or too-long search, `422` with Open Library's reason when it refuses a search, `502` when Gemini or Open Library is down, and `200` with no books for a search like `!!!`. See [An unavailable external service is a 502](#an-unavailable-external-service-is-a-502).
+- **Error handling:** `400` for a missing or too-long search, `422` with Open Library's reason when it refuses a search, `502` when Gemini is down or every Open Library search fails, books from the searches that worked when only some fail, and `200` with no books for a search like `!!!`. See [An unavailable external service is a 502](#an-unavailable-external-service-is-a-502).
 - **A results page** that shows each book's cover, title linked to Open Library, author, year, ID and explanation, in the API's order, with loading, empty and error states.
 - **Tests** for every server requirement in the brief, and for the client. See [Testing strategy](#testing-strategy).
 
@@ -87,6 +87,13 @@ A few server tests call the real Gemini API. They are skipped by default so the 
 docker compose run --rm -e LIVE_TESTS=true server-tests dotnet test FindThatBook.Api.Tests --filter Category=Live
 ```
 
+The live tests include a small set for the two prompts, sent to Gemini exactly as the app sends them:
+
+- **`GeminiQueryReaderLiveTests`** uses the brief's example searches. It checks that the first reading holds everything from a dense search (`tolkien hobbit illustrated deluxe 1937`), that sparse and ambiguous searches (`dickens`, `austen bennet`, `mark huckleberry`) are read, that a partial title is completed (`tale two cities`), and that no author or title is added that the search didn't give (`hobbit`, `dune`, `austen bennet`).
+- **`GeminiCandidateExplainerLiveTests`** checks that an explanation names the primary author and the adapter's role (Dixon's *Hobbit*), doesn't call a listed author "primary" (*Good Omens*), and mentions no year except the book's own.
+
+Gemini's wording changes from run to run, so these check what the prompts promise, not exact sentences. One run makes 13 calls to Gemini. On the free tier, running it several times in a row can hit the quota (`429 RESOURCE_EXHAUSTED`), which also makes the app's searches fail until it resets.
+
 ### Testing strategy
 
 Every server requirement in the brief has tests, and none of them touch the network: Gemini and Open Library are replaced by fakes (`FakeGeminiClient`, `FakeOpenLibraryClient`), and the HTTP clients are tested against a stub handler with recorded JSON. The tests mirror the code's folders, so each pipeline stage's tests sit in the matching folder under `FindThatBook.Api.Tests/Features/Books/Search/Pipeline/`.
@@ -95,13 +102,23 @@ Every server requirement in the brief has tests, and none of them touch the netw
 - **Stages that call a service are tested against a fake of it:** the reader and explainer against a fake Gemini, the finder against a fake Open Library.
 - **`BookSearchService` is tested with fakes of its stages,** so each test checks the order and limits of the search on its own.
 - **`BookSearchEndpointTests` runs whole searches through ASP.NET and every stage,** with only Gemini and Open Library faked, to check the response the brief describes and its error statuses.
-- **Playwright tests check the page in a real browser.** `client/e2e/search-button.spec.ts` covers the search button: disabled until something is typed, searching on click and on Enter with the text trimmed, "Searching…" blocking a second search, and the no-results and unavailable messages. The API is answered with `page.route`, so the tests check the page alone.
+- **Playwright tests check the page in a real browser.** The API is answered with `page.route`, so they check the page alone. `client/e2e/search-button.spec.ts` covers the search button:
+
+| Playwright test | What it checks |
+|---|---|
+| Disabled until something is typed | Empty or only spaces: disabled. Text: enabled. Cleared again: disabled. |
+| Searches for what was typed, trimmed | `"  tolkien hobbit  "` sends one request with `q=tolkien hobbit`, and the book and its explanation appear |
+| Enter also searches | Pressing Enter in the field submits, like clicking |
+| Blocks a second search while one runs | During a slow answer the button reads "Searching…" and is disabled, then comes back, and only one request is sent |
+| No results | Shows "No books matched “zzzz”." |
+| Open Library's reason for a `422` | A refused search for `of` shows "Open Library couldn't run this search: Query too short, must be at least 3 characters.", and the button stays usable |
+| Unavailable, then retry | A `502` shows "Search is unavailable right now…", and the next click searches again and clears the error |
 
 | Brief requirement | Tests |
 |---|---|
 | 1. Accept sparse, dense and ambiguous searches | `BookSearchServiceTests`, `BookSearchEndpointTests` (the brief's own examples), `PersonNamesTests` (partial names) |
-| 2a. AI extracts `{ title?, author?, keywords[] }` | `GeminiQueryReaderTests` |
-| 2b. A grounded "why it matched" explanation | `GeminiCandidateExplainerTests`, `BookResultMapperTests` (fallback sentence) |
+| 2a. AI extracts `{ title?, author?, keywords[] }` | `GeminiQueryReaderTests`, `GeminiQueryReaderLiveTests` (live) |
+| 2b. A grounded "why it matched" explanation | `GeminiCandidateExplainerTests`, `GeminiCandidateExplainerLiveTests` (live), `BookResultMapperTests` (fallback sentence) |
 | 3a. Search `/search.json`; fetch `/works`, `/authors`, `/authors/{id}/works` | `OpenLibraryClientTests`, `OpenLibraryCandidateFinderTests` |
 | 3b. Normalize: lowercase, punctuation, diacritics, partials | `StringExtensionsTests`, `CandidateRankerTests` (*tale two cities*) |
 | 3b.i. Subtitle variants | `WorkConsolidatorTests`, `CandidateRankerTests` |
@@ -109,7 +126,7 @@ Every server requirement in the brief has tests, and none of them touch the netw
 | 4. Matching hierarchy A to E | `CandidateRankerTests`, `BookSearchServiceTests` |
 | Data quality note: contributors are lower signal and explanations name them | `PrimaryAuthorResolverTests`, `CandidateRankerTests` (tier B), `GeminiCandidateExplainerTests` |
 | Return results: title, primary author, year, ID and link, cover, explanation, ordered | `BookResultMapperTests`, `BookSearchEndpointTests` |
-| Error handling: 400, 422, 502 | `BookSearchEndpointTests`, `ExternalServiceErrorEndpointTests`, `GeminiClientTests`, `OpenLibraryClientTests` |
+| Error handling: 400, 422, 502, and partial results when one search fails | `BookSearchEndpointTests`, `ExternalServiceErrorEndpointTests`, `GeminiClientTests`, `OpenLibraryClientTests`, `OpenLibraryCandidateFinderTests`, the client's `search.spec.ts` and `search.http.spec.ts`, and the Playwright tests |
 
 Not covered: the optional AI re-ranking (2c), which isn't built. The brief's "up to 5" results is tested as 10, the limit chosen for this app.
 
@@ -135,8 +152,32 @@ The generated client uses `http://api:8080/` as its default root URL because tha
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/books/search?q={text}` | Searches for books. Returns `400` if `q` is missing, blank, or over 200 characters, `422` with Open Library's reason if Open Library refuses every search made from it, and `502` if Open Library or Gemini is unavailable. A search with no letters or digits, such as `!!!`, returns `200` with no books. |
+| `GET /api/books/search?q={text}` | Searches for books. Returns `400` if `q` is missing, blank, or over 200 characters, `422` with Open Library's reason if Open Library refuses every search made from it, and `502` if Gemini is unavailable or every Open Library search fails. When only some Open Library searches fail, the books the others found are returned. A search with no letters or digits, such as `!!!`, returns `200` with no books. |
 | `GET /api/health` | Reports that the API is running. |
+
+Each result follows the brief's example and adds a few fields:
+
+```json
+{
+  "title": "The Hobbit",
+  "author": "J.R.R. Tolkien",
+  "authors": ["J.R.R. Tolkien"],
+  "contributors": [
+    { "name": "Charles Dixon", "role": "Adapter" },
+    { "name": "Sean Deming", "role": "Adapter" }
+  ],
+  "first_publish_year": 1990,
+  "open_library_id": "OL219602W",
+  "url": "https://openlibrary.org/works/OL219602W",
+  "cover_url": "https://covers.openlibrary.org/b/id/8406766-M.jpg",
+  "tier": "B",
+  "explanation": "Exact title; J.R.R. Tolkien is primary author; Charles Dixon listed as adapter."
+}
+```
+
+- **`authors`** lists the people who wrote the book: its primary authors, or everyone listed as an author when Open Library doesn't show which of them wrote it (*Good Omens* gives `["Terry Pratchett", "Neil Gaiman"]`).
+- **`author`** is the same people joined with commas, kept for the brief's shape.
+- **`contributors`** lists people who worked on the book without writing it, with the `role` Open Library recorded, or `null` when the person was recognized as a contributor without one.
 
 Search runs in steps: Gemini reads the search into readings, Open Library is searched once per reading, each work's primary authors are worked out, duplicate works are merged, the works are ranked against the most likely reading using the brief's tiers A to E, and Gemini explains the ten that are returned.
 
@@ -399,9 +440,9 @@ Decisions behind these rules:
 
 ## Settled search behaviour
 
-- **Each reading is searched in parallel,** asking for 10 works each.
+- **Readings are searched at most three at a time,** asking for 10 works each. Open Library is a free service that asks for considerate use, so a search with nine readings runs in three rounds instead of nine requests at once. `MaxConcurrentSearches` in `OpenLibraryCandidateFinder` sets the limit.
 - **When Gemini gives no readings,** the normalized search is sent to Open Library instead, so a Gemini problem doesn't mean no results.
-- **A refused reading is skipped while other readings got through,** so one refused reading doesn't lose the others. Only when every reading is refused does the user get a `422`.
+- **A search that fails is skipped while other searches found books,** so one failure doesn't lose the rest. That covers both a refused search and an outage (Open Library unreachable, too slow or returning an error); the outage is logged as a warning. Only when no search worked does the user hear about it: a `502` if any search hit an outage, since trying again may help, or a `422` with Open Library's reasons if every search was refused.
 - **Up to ten results are returned.** The brief's tier E says "up to 5 ordered candidates"; `MaxResults` is 10 by choice.
 - **The order is decided on the server only.** `BookSearchService` returns the results best first: by tier, A to E, and within a tier in the order the readings found them. The client shows them exactly as given and never re-sorts, which its tests check. So the ranking rules live in one place, and a change to them never needs a client release.
 - **When Gemini can't explain a result** (its answer is blocked or isn't valid JSON), the result keeps its tier and gets a plain sentence built from Open Library's fields instead: *Open Library lists "The Hobbit" by J.R.R. Tolkien, first published in 1937.*
@@ -416,7 +457,6 @@ What I would do with more time: first the known limitations, then the improvemen
 - **A subtitle can make a different book an exact match.** "The Hobbit: The Desolation of Smaug" has the main title "The Hobbit", so it counts as an exact title for `hobbit`.
 - **A search by subtitle alone isn't reliably found.** Open Library's work record for *The Hobbit* has no subtitle, so `title=there and back again` doesn't match it, and Gemini isn't allowed to name a title the search didn't give. A work that does record the subtitle is only a near match (tier C).
 - **Primary authors are only as good as Open Library's data.** Work records carry no roles, so a contributor is only recognized when a role is recorded or the original work is among the results. Otherwise everyone listed stays a listed author, and nobody is guessed.
-- **The page shows a general error for a `422`.** The client shows the validation message for a `400` and a "search unavailable" message for a `502`, but doesn't yet show Open Library's reason for a refused search.
 - **The optional AI re-ranking (2c) isn't built.** The order comes from the tiers and Open Library's relevance.
 - **Gemini is called twice per search,** once to read it and once to explain the results. That adds latency, and an outage of either call fails the search with a `502`.
 

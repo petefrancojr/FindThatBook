@@ -27,12 +27,15 @@ public static class BookResultMapper
             return null;
         }
 
-        var author = ToAuthor(candidate);
+        var authors = ToAuthors(candidate);
+        var author = authors.Count > 0 ? string.Join(", ", authors) : "Unknown author";
 
         return new BookResult
         {
             Title = doc.Title,
             Author = author,
+            Authors = authors,
+            Contributors = ToContributors(candidate, authors),
             FirstPublishYear = doc.FirstPublishYear,
             OpenLibraryId = doc.WorkId,
             Url = ToUrl(doc),
@@ -46,22 +49,29 @@ public static class BookResultMapper
     /// The primary authors. When nothing shows who wrote the book, everyone listed as an author, since guessing
     /// could name an illustrator as the writer. Contributors are only used when no one else is listed.
     /// </summary>
-    private static string ToAuthor(BookCandidate candidate)
+    private static IReadOnlyList<string> ToAuthors(BookCandidate candidate)
     {
         var primary = candidate.PrimaryAuthors.Select(author => author.Name).ToList();
         if (primary.Count > 0)
         {
-            return string.Join(", ", primary);
+            return primary;
         }
 
         var listed = candidate.Authors.Where(author => author.Credit == AuthorCredit.Listed).Select(author => author.Name).ToList();
         if (listed.Count > 0)
         {
-            return string.Join(", ", listed);
+            return listed;
         }
 
-        return candidate.Authors.FirstOrDefault()?.Name ?? "Unknown author";
+        return candidate.Authors.Take(1).Select(author => author.Name).ToList();
     }
+
+    /// <summary>The contributors, with their roles, leaving out anyone already named as an author.</summary>
+    private static IReadOnlyList<BookContributor> ToContributors(BookCandidate candidate, IReadOnlyList<string> authors) =>
+        candidate.Contributors
+            .Where(contributor => !authors.Contains(contributor.Name))
+            .Select(contributor => new BookContributor { Name = contributor.Name, Role = contributor.Role })
+            .ToList();
 
     /// <summary>
     /// An edition that was never attached to a work is listed under its edition ID, which lives at /books/.

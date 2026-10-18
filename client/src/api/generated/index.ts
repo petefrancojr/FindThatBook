@@ -7,6 +7,7 @@ export { RequestBuilder } from './request-builder';
 export type { StrictHttpResponse } from './strict-http-response';
 export { Api } from './api';
 
+export type { BookContributor } from './models/book-contributor';
 export type { BookResult } from './models/book-result';
 export type { BookSearchResponse } from './models/book-search-response';
 export type { ProblemDetails } from './models/problem-details';

@@ -108,6 +108,22 @@ test.describe('search button', () => {
     await expect(page.getByText('No books matched “zzzz”.')).toBeVisible();
   });
 
+  test('shows Open Library\'s reason when it refuses the search', async ({ page }) => {
+    await answerSearches(
+      page,
+      { title: 'Open Library refused this search.', status: 422, detail: 'Query too short, must be at least 3 characters.' },
+      422,
+    );
+
+    await page.getByRole('searchbox').fill('of');
+    await page.getByRole('button', { name: 'Search' }).click();
+
+    await expect(page.getByRole('alert')).toHaveText(
+      "Open Library couldn't run this search: Query too short, must be at least 3 characters.",
+    );
+    await expect(page.getByRole('button', { name: 'Search' })).toBeEnabled();
+  });
+
   test('shows an error when search is unavailable, and searches again on the next click', async ({ page }) => {
     await answerSearches(page, { status: 502, title: 'A service this search depends on is unavailable.' }, 502);
 

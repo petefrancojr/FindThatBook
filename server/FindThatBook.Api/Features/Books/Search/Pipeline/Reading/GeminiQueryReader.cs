@@ -18,7 +18,7 @@ public class GeminiQueryReader(IGeminiClient gemini, ILogger<GeminiQueryReader> 
         The text may hold a title, an author, a character's name, a year, special keywords, or a mix of these,
         often misspelled, abbreviated or in any order.
 
-        Return {MaxReadings} readings of the search, most likely first. You are allowed to provide duplicate readings only after all possibile arrangments have been exhausted.
+        Return {MaxReadings} readings of the search, most likely first. You are allowed to provide duplicate readings only after all possible arrangements have been exhausted.
         The first reading is the complete one: it holds every title, author and keyword you identified, because the
         books found are ranked against it. The readings that split the search come after it.
         - title: the book's full, correctly spelled title, only if the search points to one.

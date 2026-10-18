@@ -48,6 +48,37 @@ public class BookResultMapperTests
     }
 
     [Fact]
+    public void ListsThePrimaryAuthorsAndTheContributorsWithTheirRoles()
+    {
+        var result = BookResultMapper.ToBookResult(DixonsHobbit)!;
+
+        Assert.Equal(["J.R.R. Tolkien"], result.Authors);
+        var contributor = Assert.Single(result.Contributors);
+        Assert.Equal("Charles Dixon", contributor.Name);
+        Assert.Equal("Adapter", contributor.Role);
+    }
+
+    [Fact]
+    public void ListsEveryCoAuthorSeparately()
+    {
+        var goodOmens = Ranked(Candidate(Work("OL453936W", "Good Omens", ["Terry Pratchett", "Neil Gaiman"]), Listed("Terry Pratchett"), Listed("Neil Gaiman")), "A", null);
+
+        var result = BookResultMapper.ToBookResult(goodOmens)!;
+
+        Assert.Equal(["Terry Pratchett", "Neil Gaiman"], result.Authors);
+        Assert.Empty(result.Contributors);
+    }
+
+    [Fact]
+    public void LeavesAContributorsRoleEmptyWhenNoneWasRecorded()
+    {
+        var hobbit = Ranked(Candidate(Work("OL219602W", "The Hobbit", ["Charles Dixon", "J.R.R. Tolkien"]),
+            (Name: "Charles Dixon", Credit: AuthorCredit.Contributor, Role: (string?)null), Primary("J.R.R. Tolkien")), "B", null);
+
+        Assert.Null(Assert.Single(BookResultMapper.ToBookResult(hobbit)!.Contributors).Role);
+    }
+
+    [Fact]
     public void LinksAWorkToItsOpenLibraryPage() =>
         Assert.Equal("https://openlibrary.org/works/OL219602W", BookResultMapper.ToBookResult(DixonsHobbit)!.Url);
 

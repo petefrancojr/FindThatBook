@@ -99,6 +99,27 @@ describe('Search (HTTP)', () => {
     expect(page().querySelector('.error')?.textContent?.trim()).toBe('Enter a search term.');
   });
 
+  it('shows Open Library\'s reason from a real 422 response', async () => {
+    await searchFor('the');
+
+    http
+      .expectOne((r) => r.url === '/api/books/search')
+      .flush(
+        {
+          type: 'https://tools.ietf.org/html/rfc4918#section-11.2',
+          title: 'Open Library refused this search.',
+          status: 422,
+          detail: 'Invalid query; the following queries are not allowed: the.',
+        },
+        { status: 422, statusText: 'Unprocessable Entity' },
+      );
+    await settle();
+
+    expect(page().querySelector('.error')?.textContent?.trim()).toBe(
+      "Open Library couldn't run this search: Invalid query; the following queries are not allowed: the.",
+    );
+  });
+
   it('shows the unavailable message from a real 502 response', async () => {
     await searchFor('austen');
 

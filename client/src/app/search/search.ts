@@ -46,6 +46,13 @@ export class Search {
       const messages = Object.values<string[]>(err.error?.errors ?? {}).flat();
       return messages[0] ?? 'Check your search and try again.';
     }
+    // Open Library refused the search terms. The API passes its reason on in the ProblemDetails detail.
+    if (err instanceof HttpErrorResponse && err.status === 422) {
+      const reason = typeof err.error?.detail === 'string' ? err.error.detail.trim() : '';
+      return reason
+        ? `Open Library couldn't run this search: ${reason}`
+        : "Open Library couldn't run this search. Try different search terms.";
+    }
     return 'Search is unavailable right now. Try again in a moment.';
   }
 }

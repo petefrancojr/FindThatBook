@@ -378,6 +378,37 @@ describe('Search', () => {
       expect(error()).toBe('Check your search and try again.');
     });
 
+    it('shows Open Library\'s reason when it refuses the search (422)', async () => {
+      searchBooks.mockRejectedValue(
+        new HttpErrorResponse({
+          status: 422,
+          error: { title: 'Open Library refused this search.', status: 422, detail: 'Query too short, must be at least 3 characters.' },
+        }),
+      );
+
+      await searchFor('of');
+
+      expect(error()).toBe("Open Library couldn't run this search: Query too short, must be at least 3 characters.");
+      expect(page().querySelector('.error')?.getAttribute('role')).toBe('alert');
+    });
+
+    it('asks for different search terms when a 422 has no reason', async () => {
+      searchBooks.mockRejectedValue(new HttpErrorResponse({ status: 422 }));
+
+      await searchFor('of');
+
+      expect(error()).toBe("Open Library couldn't run this search. Try different search terms.");
+    });
+
+    it('does not call a refused search unavailable', async () => {
+      searchBooks.mockRejectedValue(new HttpErrorResponse({ status: 422, error: { detail: 'Not allowed: the.' } }));
+
+      await searchFor('the');
+
+      expect(error()).not.toContain('unavailable');
+      expect(button().disabled).toBe(false);
+    });
+
     it('says search is unavailable when Open Library or Gemini is down (502)', async () => {
       searchBooks.mockRejectedValue(new HttpErrorResponse({ status: 502 }));
 

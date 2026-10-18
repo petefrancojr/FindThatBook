@@ -89,6 +89,20 @@ public class BookSearchEndpointTests(WebApplicationFactory<Program> factory) : I
     }
 
     [Fact]
+    public async Task ReturnsTheAuthorsAndContributorsAsLists()
+    {
+        var gemini = Gemini("""{ "readings": [{ "title": "The Hobbit", "author": "Charles Dixon", "keywords": [] }] }""");
+        var client = Client(gemini, FakeOpenLibraryClient.Finding(DixonsHobbit));
+
+        var book = (await ResultsOf(await client.GetAsync("/api/books/search?q=dixon%20hobbit")))[0];
+
+        Assert.Equal(["J.R.R. Tolkien"], book.GetProperty("authors").EnumerateArray().Select(author => author.GetString()));
+        var contributors = book.GetProperty("contributors").EnumerateArray().ToList();
+        Assert.Equal(["Charles Dixon", "Sean Deming"], contributors.Select(contributor => contributor.GetProperty("name").GetString()));
+        Assert.All(contributors, contributor => Assert.Equal("Adapter", contributor.GetProperty("role").GetString()));
+    }
+
+    [Fact]
     public async Task ReturnsAnOrderedListBestMatchFirst()
     {
         var silmarillion = Work("OL27495W", "The Silmarillion", ["J.R.R. Tolkien|OL26320A"], editions: 100);
@@ -180,6 +194,19 @@ public class BookSearchEndpointTests(WebApplicationFactory<Program> factory) : I
         Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.Equal("Open Library is unavailable right now. Try again in a moment.", json.RootElement.GetProperty("detail").GetString());
+    }
+
+    [Fact]
+    public async Task ReturnsTheBooksOtherSearchesFoundWhenOneOpenLibrarySearchFails()
+    {
+        var gemini = Gemini("""{ "readings": [{ "title": "The Hobbit", "author": "J.R.R. Tolkien", "keywords": [] }, { "title": "The Hobbit", "keywords": [] }] }""");
+        var openLibrary = new FakeOpenLibraryClient(request =>
+            request.Author is not null ? throw new OpenLibraryUnavailableException("Open Library timed out.") : [Hobbit]);
+
+        var results = await ResultsOf(await Client(gemini, openLibrary).GetAsync("/api/books/search?q=tolkien%20hobbit"));
+
+        Assert.Equal(2, openLibrary.Searches.Count);
+        Assert.Equal("OL27482W", Assert.Single(results.EnumerateArray()).GetProperty("open_library_id").GetString());
     }
 
     [Fact]
