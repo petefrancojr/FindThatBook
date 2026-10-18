@@ -5,6 +5,8 @@ A small library discovery app. A reader types a messy search such as `austen ben
 - **Server:** .NET 10 Web API (`server/`)
 - **Client:** Angular (`client/`)
 
+This took about 8 hours across two days; I went beyond the brief's 4–6 hours on normalization, author resolution, and testing.
+
 ## Contents
 
 **Where to find what the brief asks for**
