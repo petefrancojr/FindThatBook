@@ -1,0 +1,16 @@
+# Render Blueprint: one web service built from the Dockerfile at the repo root.
+# Render redeploys on every push to the connected branch.
+services:
+  - type: web
+    name: findthatbook
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      # Render routes traffic to $PORT; the API listens on 8080.
+      - key: PORT
+        value: "8080"
+      # Render asks for the value when the Blueprint is first applied. It is never stored in the repo.
+      - key: Gemini__ApiKey
+        sync: false

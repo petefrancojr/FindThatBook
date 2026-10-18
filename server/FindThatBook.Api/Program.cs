@@ -28,6 +28,11 @@ var app = builder.Build();
 app.UseExceptionHandler();
 app.UseHttpLogging();
 
+// The combined image (Dockerfile at the repo root) puts the Angular build in wwwroot, so one service hosts both.
+// Elsewhere wwwroot doesn't exist and these do nothing.
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
