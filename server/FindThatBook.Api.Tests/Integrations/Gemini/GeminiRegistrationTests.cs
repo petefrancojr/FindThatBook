@@ -40,7 +40,7 @@ public class GeminiRegistrationTests
 
         var options = provider.GetRequiredService<IOptions<GeminiOptions>>().Value;
         Assert.Equal("https://generativelanguage.googleapis.com/", options.BaseUrl);
-        Assert.False(string.IsNullOrWhiteSpace(options.Model));
+        Assert.Equal("gemini-3.5-flash-lite", options.Model);
         Assert.Equal(10, options.TimeoutSeconds);
         Assert.Null(options.ApiKey);
     }

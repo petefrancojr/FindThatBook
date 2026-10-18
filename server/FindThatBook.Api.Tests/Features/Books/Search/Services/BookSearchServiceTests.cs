@@ -31,20 +31,15 @@ public class BookSearchServiceTests
             explainer ?? new RecordingExplainer(),
             NullLogger<BookSearchService>.Instance);
 
-    [Theory]
-    [InlineData("dickens")]
-    [InlineData("tale two cities")]
-    [InlineData("tolkien hobbit illustrated deluxe 1937")]
-    [InlineData("mark huckleberry")]
-    [InlineData("austen bennet")]
-    public async Task SendsEveryKindOfSearchToTheReaderAsTyped(string query)
+    [Fact]
+    public async Task SendsTheSearchToTheReaderAsTypedAndEchoesIt()
     {
         var reader = new RecordingReader([]);
 
-        var response = await CreateService([], [], reader: reader).SearchAsync(query);
+        var response = await CreateService([], [], reader: reader).SearchAsync("Tolkien Hobbit, illustrated 1937");
 
-        Assert.Equal(query, Assert.Single(reader.Queries));
-        Assert.Equal(query, response.Query);
+        Assert.Equal("Tolkien Hobbit, illustrated 1937", Assert.Single(reader.Queries));
+        Assert.Equal("Tolkien Hobbit, illustrated 1937", response.Query);
     }
 
     [Fact]

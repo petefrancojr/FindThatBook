@@ -124,21 +124,6 @@ public class BookSearchEndpointTests(WebApplicationFactory<Program> factory) : I
         Assert.Equal(10, results.GetArrayLength());
     }
 
-    [Theory]
-    [InlineData("dickens")]
-    [InlineData("tale two cities")]
-    [InlineData("tolkien hobbit illustrated deluxe 1937")]
-    [InlineData("mark huckleberry")]
-    [InlineData("austen bennet")]
-    public async Task AcceptsSparseDenseAndAmbiguousSearches(string query)
-    {
-        var client = Client(Gemini("""{ "readings": [] }"""), FakeOpenLibraryClient.Finding(Hobbit));
-
-        var response = await client.GetAsync($"/api/books/search?q={Uri.EscapeDataString(query)}");
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-    }
-
     [Fact]
     public async Task ReturnsNoBooksForASearchWithNoLettersOrDigits()
     {

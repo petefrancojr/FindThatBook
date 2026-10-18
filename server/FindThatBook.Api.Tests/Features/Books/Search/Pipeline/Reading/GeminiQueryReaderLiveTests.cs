@@ -47,12 +47,15 @@ public class GeminiQueryReaderLiveTests
     }
 
     [LiveFact]
-    public async Task ReadsACharacterHintAsPartOfTheSearch()
+    public async Task WorksOutTheBookFromAPartialNameAndACharacter()
     {
+        // "mark" is part of Mark Twain's name and "huckleberry" is his character, so the search points to
+        // Adventures of Huckleberry Finn. Finding the words in the search would prove nothing, so this checks that
+        // Gemini completed them into the book or its author.
         var readings = await ReadAsync("mark huckleberry");
 
         Assert.Contains(readings, reading =>
-            (reading.Title?.Contains("huckleberry") ?? false) || reading.Keywords.Any(keyword => keyword.Contains("huckleberry")));
+            (reading.Title?.Contains("huckleberry finn") ?? false) || (reading.Author?.Contains("twain") ?? false));
     }
 
     [LiveTheory]

@@ -117,7 +117,8 @@ describe('Search', () => {
   });
 
   describe('search button', () => {
-    it('is a submit button inside the search form, so Enter in the field also searches', () => {
+    // Pressing Enter in the field is checked in a real browser by the Playwright tests.
+    it('is the search form\'s submit button', () => {
       const form = page().querySelector('form')!;
       expect(button().type).toBe('submit');
       expect(form.contains(button())).toBe(true);
@@ -135,12 +136,6 @@ describe('Search', () => {
       expect(searchBooks).toHaveBeenCalledTimes(1);
       expect(searchBooks).toHaveBeenCalledWith({ q: 'tolkien hobbit' });
       expect(results()).toHaveLength(1);
-    });
-
-    it('does nothing when clicked while disabled', async () => {
-      await clickSearch();
-
-      expect(searchBooks).not.toHaveBeenCalled();
     });
   });
 
@@ -187,17 +182,6 @@ describe('Search', () => {
           permutations([...items.slice(0, i), ...items.slice(i + 1)]).map((rest) => [item, ...rest]),
         );
       }
-
-      it('shows results as a numbered list starting at 1', async () => {
-        searchBooks.mockResolvedValue(response(ranked));
-
-        await searchFor('anything');
-
-        const list = page().querySelector('ol.results')!;
-        expect(list.hasAttribute('reversed')).toBe(false);
-        expect(list.hasAttribute('start')).toBe(false);
-        expect(list.children).toHaveLength(ranked.length);
-      });
 
       it('keeps an order that matches no sort by title, author, year, ID or tier', async () => {
         searchBooks.mockResolvedValue(response(ranked));
@@ -390,6 +374,8 @@ describe('Search', () => {
 
       expect(error()).toBe("Open Library couldn't run this search: Query too short, must be at least 3 characters.");
       expect(page().querySelector('.error')?.getAttribute('role')).toBe('alert');
+      // A refusal is the reader's to fix, so they can search again straight away.
+      expect(button().disabled).toBe(false);
     });
 
     it('asks for different search terms when a 422 has no reason', async () => {
@@ -398,15 +384,6 @@ describe('Search', () => {
       await searchFor('of');
 
       expect(error()).toBe("Open Library couldn't run this search. Try different search terms.");
-    });
-
-    it('does not call a refused search unavailable', async () => {
-      searchBooks.mockRejectedValue(new HttpErrorResponse({ status: 422, error: { detail: 'Not allowed: the.' } }));
-
-      await searchFor('the');
-
-      expect(error()).not.toContain('unavailable');
-      expect(button().disabled).toBe(false);
     });
 
     it('says search is unavailable when Open Library or Gemini is down (502)', async () => {

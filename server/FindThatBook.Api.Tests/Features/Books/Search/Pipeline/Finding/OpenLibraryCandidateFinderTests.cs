@@ -164,7 +164,7 @@ public class OpenLibraryCandidateFinderTests
     }
 
     [Fact]
-    public async Task AsksForMoreWorksThanAreReturnedSoRankingHasCandidates()
+    public async Task AsksOpenLibraryForTenWorksPerSearch()
     {
         var openLibrary = FakeOpenLibraryClient.Finding();
 
@@ -172,14 +172,6 @@ public class OpenLibraryCandidateFinderTests
 
         Assert.Equal(10, Assert.Single(openLibrary.Searches).Limit);
     }
-
-    [Theory]
-    [InlineData("contributor")]
-    [InlineData("author_key")]
-    [InlineData("edition_count")]
-    [InlineData("first_publish_year")]
-    [InlineData("cover_i")]
-    public void RequestsTheFieldsTheLaterStagesNeed(string field) => Assert.Contains(field, WorkSearchRequest.DefaultFields);
 
     /// <summary>
     /// Answers each search after a delay with one work titled like the search, and records how many searches

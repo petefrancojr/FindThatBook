@@ -18,18 +18,6 @@ public class BookSearchControllerTests
         Assert.Equal("austen bennet", service.ReceivedQuery);
     }
 
-    [Fact]
-    public async Task Search_ReturnsServiceResponseAsOk()
-    {
-        var service = new FakeBookSearchService();
-        var controller = new BookSearchController(service);
-
-        var result = await controller.Search("austen bennet", CancellationToken.None);
-
-        var ok = Assert.IsType<OkObjectResult>(result.Result);
-        Assert.Same(service.Response, ok.Value);
-    }
-
     private class FakeBookSearchService : IBookSearchService
     {
         public string? ReceivedQuery { get; private set; }

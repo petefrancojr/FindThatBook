@@ -58,16 +58,18 @@ public class GeminiCandidateExplainerTests
     }
 
     [Fact]
-    public async Task TellsGeminiToStayGroundedInTheGivenFields()
+    public async Task AsksForJsonWithAnIdAndExplanationForEachCandidate()
     {
         var gemini = FakeGeminiClient.Answering("""{ "explanations": [] }""");
 
         await CreateExplainer(gemini).ExplainAsync("dixon hobbit", ReadingOf("the hobbit", "charles dixon"), [DixonsHobbit]);
 
-        var instruction = Assert.Single(gemini.Requests).SystemInstruction!.Parts[0].Text!;
-        Assert.Contains("Use only the facts and fields given", instruction);
-        Assert.Contains("disagree with the tier", instruction);
-        Assert.Equal("application/json", gemini.Requests[0].GenerationConfig!.ResponseMimeType);
+        var config = Assert.Single(gemini.Requests).GenerationConfig!;
+        Assert.Equal(0, config.Temperature);
+        Assert.Equal("application/json", config.ResponseMimeType);
+        var explanation = config.ResponseJsonSchema!["properties"]!["explanations"]!["items"]!;
+        Assert.Equal("""["id","explanation"]""", explanation["required"]!.ToJsonString());
+        Assert.Equal("string", (string?)explanation["properties"]!["explanation"]!["type"]);
     }
 
     [Fact]

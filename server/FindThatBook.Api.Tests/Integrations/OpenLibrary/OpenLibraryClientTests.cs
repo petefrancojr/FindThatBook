@@ -36,7 +36,8 @@ public class OpenLibraryClientTests
         Assert.Contains("author=j r r tolkien", query);
         Assert.Contains("q=1937", query);
         Assert.Contains("limit=10", query);
-        Assert.Contains("fields=key,title", query);
+        // Without fields, Open Library returns every field, including edition lists hundreds of entries long.
+        Assert.Contains($"fields={string.Join(',', WorkSearchRequest.DefaultFields)}", query);
         Assert.DoesNotContain("subject=", query);
     }
 

@@ -89,7 +89,7 @@ docker compose run --rm -e LIVE_TESTS=true server-tests dotnet test FindThatBook
 
 The live tests include a small set for the two prompts, sent to Gemini exactly as the app sends them:
 
-- **`GeminiQueryReaderLiveTests`** uses the brief's example searches. It checks that the first reading holds everything from a dense search (`tolkien hobbit illustrated deluxe 1937`), that sparse and ambiguous searches (`dickens`, `austen bennet`, `mark huckleberry`) are read, that a partial title is completed (`tale two cities`), and that no author or title is added that the search didn't give (`hobbit`, `dune`, `austen bennet`).
+- **`GeminiQueryReaderLiveTests`** uses the brief's example searches. It checks that the first reading holds everything from a dense search (`tolkien hobbit illustrated deluxe 1937`), that sparse and ambiguous searches (`dickens`, `austen bennet`) are read, that a partial name and a character are worked out into the book (`mark huckleberry` gives *Huckleberry Finn* or Mark Twain), that a partial title is completed (`tale two cities`), and that no author or title is added that the search didn't give (`hobbit`, `dune`, `austen bennet`).
 - **`GeminiCandidateExplainerLiveTests`** checks that an explanation names the primary author and the adapter's role (Dixon's *Hobbit*), doesn't call a listed author "primary" (*Good Omens*), and mentions no year except the book's own.
 
 Gemini's wording changes from run to run, so these check what the prompts promise, not exact sentences. One run makes 13 calls to Gemini. On the free tier, running it several times in a row can hit the quota (`429 RESOURCE_EXHAUSTED`), which also makes the app's searches fail until it resets.
